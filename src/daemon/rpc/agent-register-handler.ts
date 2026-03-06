@@ -10,6 +10,7 @@ import { BACKGROUND_AGENT_NAME, getDefaultAgentDescription } from "../../shared/
 import { isPermissionLevel } from "../../shared/permissions.js";
 import { isAgentRole } from "../../shared/agent-role.js";
 import { errorMessage, logEvent } from "../../shared/daemon-log.js";
+import { isSupportedAdapterType } from "../../adapters/registry.js";
 
 function deleteAgentRow(ctx: DaemonContext, agentName: string): boolean {
   const rawDb = (ctx.db as any).db as {
@@ -88,7 +89,7 @@ export function createAgentRegisterHandler(ctx: DaemonContext): RpcMethodHandler
             }
           : undefined;
 
-      if (normalizedBind && normalizedBind.adapterType !== "telegram") {
+      if (normalizedBind && !isSupportedAdapterType(normalizedBind.adapterType)) {
         rpcError(RPC_ERRORS.INVALID_PARAMS, `Unknown adapter type: ${normalizedBind.adapterType}`);
       }
 

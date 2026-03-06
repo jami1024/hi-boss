@@ -16,6 +16,7 @@ import {
 export interface SetupUserInfoStatus {
   bossName?: string;
   bossTimezone?: string;
+  adapterBossIds?: Record<string, string>;
   telegramBossId?: string;
   hasBossToken: boolean;
   missing: {
@@ -24,6 +25,7 @@ export interface SetupUserInfoStatus {
     telegramBossId: boolean;
     bossToken: boolean;
   };
+  missingAdapterBossIds: string[];
 }
 
 export interface SetupStatus {
@@ -68,19 +70,33 @@ function hasIntegrityViolations(integrity: SetupStatus["integrity"]): boolean {
 function buildUserInfoStatus(db: HiBossDatabase): SetupUserInfoStatus {
   const bossName = (db.getBossName() ?? "").trim();
   const bossTimezone = (db.getConfig("boss_timezone") ?? "").trim();
-  const telegramBossId = (db.getAdapterBossId("telegram") ?? "").trim();
+  const requiredAdapterTypes = new Set(db.listBindings().map((binding) => binding.adapterType));
+  const adapterBossIds: Record<string, string> = {};
+  const missingAdapterBossIds: string[] = [];
+  for (const adapterType of requiredAdapterTypes) {
+    const bossId = (db.getAdapterBossId(adapterType) ?? "").trim();
+    if (!bossId) {
+      missingAdapterBossIds.push(adapterType);
+      continue;
+    }
+    adapterBossIds[adapterType] = bossId;
+  }
+  const telegramBossId = adapterBossIds.telegram ?? "";
   const hasBossToken = Boolean((db.getConfig("boss_token_hash") ?? "").trim());
+  const missingTelegramBossId = requiredAdapterTypes.has("telegram") && telegramBossId.length === 0;
   return {
     bossName: bossName || undefined,
     bossTimezone: bossTimezone || undefined,
+    adapterBossIds: Object.keys(adapterBossIds).length > 0 ? adapterBossIds : undefined,
     telegramBossId: telegramBossId || undefined,
     hasBossToken,
     missing: {
       bossName: bossName.length === 0,
       bossTimezone: bossTimezone.length === 0,
-      telegramBossId: telegramBossId.length === 0,
+      telegramBossId: missingTelegramBossId,
       bossToken: !hasBossToken,
     },
+    missingAdapterBossIds,
   };
 }
 
@@ -100,9 +116,10 @@ function buildEmptySetupStatus(): SetupStatus {
       missing: {
         bossName: true,
         bossTimezone: true,
-        telegramBossId: true,
+        telegramBossId: false,
         bossToken: true,
       },
+      missingAdapterBossIds: [],
     },
   };
 }
@@ -120,7 +137,11 @@ function buildSetupStatusFromDb(db: HiBossDatabase): SetupStatus {
     })
   );
   const userInfo = buildUserInfoStatus(db);
-  const hasMissingUserInfo = Object.values(userInfo.missing).some(Boolean);
+  const hasMissingUserInfo =
+    userInfo.missing.bossName ||
+    userInfo.missing.bossTimezone ||
+    userInfo.missing.bossToken ||
+    userInfo.missingAdapterBossIds.length > 0;
   const ready =
     completed &&
     missingRoles.length === 0 &&
@@ -154,7 +175,11 @@ export async function checkSetupStatus(): Promise<SetupStatus> {
     const roleCounts = result.roleCounts ?? { speaker: 0, leader: 0 };
     const missingRoles = result.missingRoles ?? getMissingRoles(roleCounts);
     const userInfo = result.userInfo ?? buildEmptySetupStatus().userInfo;
-    const hasMissingUserInfo = Object.values(userInfo.missing).some(Boolean);
+    const hasMissingUserInfo =
+      userInfo.missing.bossName ||
+      userInfo.missing.bossTimezone ||
+      userInfo.missing.bossToken ||
+      userInfo.missingAdapterBossIds.length > 0;
     const integrity = result.integrity ?? {
       speakerWithoutBindings: [],
       duplicateSpeakerBindings: [],

@@ -14,6 +14,7 @@ import { parseDailyResetAt, parseDurationToMs } from "../../shared/session-polic
 import { setupAgentHome } from "../../agent/home-setup.js";
 import { isValidIanaTimeZone, getDaemonIanaTimeZone } from "../../shared/timezone.js";
 import { BACKGROUND_AGENT_NAME } from "../../shared/defaults.js";
+import { isSupportedAdapterType } from "../../adapters/registry.js";
 import {
   getSpeakerBindingIntegrity,
   toSpeakerBindingIntegrityView,
@@ -149,15 +150,31 @@ export function createSetupHandlers(ctx: DaemonContext): RpcMethodRegistry {
 
       const bossName = (ctx.db.getBossName() ?? "").trim();
       const bossTimezone = (ctx.db.getConfig("boss_timezone") ?? "").trim();
-      const telegramBossId = (ctx.db.getAdapterBossId("telegram") ?? "").trim();
+      const requiredAdapterTypes = new Set(bindings.map((binding) => binding.adapterType));
+      const adapterBossIds: Record<string, string> = {};
+      const missingAdapterBossIds: string[] = [];
+      for (const adapterType of requiredAdapterTypes) {
+        const bossId = (ctx.db.getAdapterBossId(adapterType) ?? "").trim();
+        if (!bossId) {
+          missingAdapterBossIds.push(adapterType);
+          continue;
+        }
+        adapterBossIds[adapterType] = bossId;
+      }
+      const telegramBossId = adapterBossIds.telegram ?? "";
       const hasBossToken = Boolean((ctx.db.getConfig("boss_token_hash") ?? "").trim());
+      const missingTelegramBossId = requiredAdapterTypes.has("telegram") && telegramBossId.length === 0;
       const missingUserInfo = {
         bossName: bossName.length === 0,
         bossTimezone: bossTimezone.length === 0,
-        telegramBossId: telegramBossId.length === 0,
+        telegramBossId: missingTelegramBossId,
         bossToken: !hasBossToken,
       };
-      const hasMissingUserInfo = Object.values(missingUserInfo).some(Boolean);
+      const hasMissingUserInfo =
+        missingUserInfo.bossName ||
+        missingUserInfo.bossTimezone ||
+        missingUserInfo.bossToken ||
+        missingAdapterBossIds.length > 0;
       const hasIntegrityViolations =
         integrityView.speakerWithoutBindings.length > 0 ||
         integrityView.duplicateSpeakerBindings.length > 0;
@@ -181,9 +198,11 @@ export function createSetupHandlers(ctx: DaemonContext): RpcMethodRegistry {
         userInfo: {
           bossName: bossName || undefined,
           bossTimezone: bossTimezone || undefined,
+          adapterBossIds: Object.keys(adapterBossIds).length > 0 ? adapterBossIds : undefined,
           telegramBossId: telegramBossId || undefined,
           hasBossToken,
           missing: missingUserInfo,
+          missingAdapterBossIds,
         },
       };
     },
@@ -223,8 +242,8 @@ export function createSetupHandlers(ctx: DaemonContext): RpcMethodRegistry {
         rpcError(RPC_ERRORS.INVALID_PARAMS, "Invalid leader-agent.provider (expected claude or codex)");
       }
 
-      if (p.adapter.adapterType !== "telegram") {
-        rpcError(RPC_ERRORS.INVALID_PARAMS, "Invalid adapter-type (expected telegram)");
+      if (!isSupportedAdapterType(p.adapter.adapterType)) {
+        rpcError(RPC_ERRORS.INVALID_PARAMS, `Unknown adapter type: ${p.adapter.adapterType}`);
       }
       if (typeof p.adapter.adapterToken !== "string" || !p.adapter.adapterToken.trim()) {
         rpcError(RPC_ERRORS.INVALID_PARAMS, "Invalid adapter-token");
@@ -334,7 +353,11 @@ export function createSetupHandlers(ctx: DaemonContext): RpcMethodRegistry {
           ctx.db.createBinding(speakerAgentName, p.adapter.adapterType, p.adapter.adapterToken);
 
           // Store boss ID for this adapter
-          ctx.db.setAdapterBossId(p.adapter.adapterType, p.adapter.adapterBossId.trim().replace(/^@/, ""));
+          const normalizedBossId =
+            p.adapter.adapterType === "telegram"
+              ? p.adapter.adapterBossId.trim().replace(/^@/, "")
+              : p.adapter.adapterBossId.trim();
+          ctx.db.setAdapterBossId(p.adapter.adapterType, normalizedBossId);
 
           // Set boss token
           ctx.db.setBossToken(p.bossToken.trim());

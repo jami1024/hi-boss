@@ -3,7 +3,7 @@ import * as path from "path";
 import type { Agent } from "../agent/types.js";
 import type { AgentBinding } from "../daemon/db/database.js";
 import type { Envelope, EnvelopeAttachment } from "../envelope/types.js";
-import { detectAttachmentType } from "../adapters/types.js";
+import { detectAttachmentType, parseAddress } from "../adapters/types.js";
 import { formatUnixMsAsTimeZoneOffset } from "./time.js";
 import { getDaemonIanaTimeZone } from "./timezone.js";
 import { HIBOSS_TOKEN_ENV } from "./env.js";
@@ -17,6 +17,7 @@ import {
 } from "./defaults.js";
 import { formatShortId } from "./id-format.js";
 import { parseAgentRoleFromMetadata } from "./agent-role.js";
+import { extractWorkItemEnvelopeFields } from "./work-item.js";
 
 const MAX_CUSTOM_FILE_CHARS = 10_000;
 
@@ -135,6 +136,15 @@ function isChannelMetadata(metadata: unknown): metadata is ChannelMetadata {
 function stripBossMarkerSuffix(name: string): string {
   const trimmed = name.trim();
   return trimmed.replace(/\s\[boss\]$/, "");
+}
+
+function getFromAgentName(address: string): string {
+  try {
+    const parsed = parseAddress(address);
+    return parsed.type === "agent" ? parsed.agentName : "";
+  } catch {
+    return "";
+  }
 }
 
 function withBossMarkerSuffix(name: string, fromBoss: boolean): string {
@@ -334,6 +344,7 @@ export function buildTurnPromptContext(params: {
   const envelopes = (params.envelopes ?? []).map((env, idx) => {
     const semantic = buildSemanticFrom(env);
     const inReplyTo = buildInReplyTo(env.metadata);
+    const fromAgentName = getFromAgentName(env.from);
     const attachments = (env.content.attachments ?? []).map((att) => {
       const type = detectAttachmentType(att);
       const displayName = displayAttachmentName(att) ?? "";
@@ -357,6 +368,7 @@ export function buildTurnPromptContext(params: {
       const cronScheduleId = getCronScheduleId(env.metadata);
       return cronScheduleId ? formatShortId(cronScheduleId) : "";
     })();
+    const workItem = extractWorkItemEnvelopeFields(env.metadata);
 
     const deliverAtPresent = typeof env.deliverAt === "number";
     const deliverAt = deliverAtPresent
@@ -371,6 +383,7 @@ export function buildTurnPromptContext(params: {
       id: env.id,
       idShort: formatShortId(env.id),
       from: env.from,
+      fromAgentName,
       fromName: semantic?.fromName ?? "",
       fromBoss: env.fromBoss,
       isGroup: semantic?.isGroup ?? false,
@@ -384,6 +397,12 @@ export function buildTurnPromptContext(params: {
       },
       deliverAt,
       cronId,
+      workItem: {
+        present: Boolean(workItem.workItemId),
+        id: workItem.workItemId ?? "",
+        state: workItem.workItemState ?? "",
+        title: workItem.workItemTitle ?? "",
+      },
       content: {
         text: env.content.text ?? "(none)",
         attachments,
@@ -456,6 +475,7 @@ export function buildCliEnvelopePromptContext(params: {
     const cronScheduleId = getCronScheduleId(env.metadata);
     return cronScheduleId ? formatShortId(cronScheduleId) : "";
   })();
+  const workItem = extractWorkItemEnvelopeFields(env.metadata);
 
   const lastDeliveryError = (() => {
     if (!env.metadata || typeof env.metadata !== "object") return null;
@@ -492,6 +512,12 @@ export function buildCliEnvelopePromptContext(params: {
       },
       deliverAt,
       cronId,
+      workItem: {
+        present: Boolean(workItem.workItemId),
+        id: workItem.workItemId ?? "",
+        state: workItem.workItemState ?? "",
+        title: workItem.workItemTitle ?? "",
+      },
       content: {
         text: env.content.text ?? "(none)",
         attachments,

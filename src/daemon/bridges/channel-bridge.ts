@@ -11,6 +11,27 @@ import type { HiBossDatabase } from "../db/database.js";
 import type { DaemonConfig } from "../daemon.js";
 import { errorMessage, logEvent } from "../../shared/daemon-log.js";
 
+const DESTRUCTIVE_INTENT_PATTERN =
+  /\b(rm|rmdir|del|delete|remove|unlink|drop|truncate|format|wipe|purge|destroy|reset)\b|删除|移除|清空|重置|格式化|销毁|抹掉/i;
+
+const DESTRUCTIVE_CONFIRM_PREFIX_PATTERN = /^\s*(确认执行|确认操作|确认删除|confirm)\s*[:：]?\s*/i;
+
+function hasDestructiveIntent(text?: string): boolean {
+  if (!text) return false;
+  return DESTRUCTIVE_INTENT_PATTERN.test(text);
+}
+
+function stripDestructiveConfirmationPrefix(text?: string): string | undefined {
+  if (!text) return undefined;
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  const stripped = trimmed.replace(DESTRUCTIVE_CONFIRM_PREFIX_PATTERN, "").trim();
+  if (stripped.length === trimmed.length || !stripped) {
+    return undefined;
+  }
+  return stripped;
+}
+
 /**
  * Bridge between ChannelMessages and Envelopes.
  * Converts incoming platform messages to internal envelopes.
@@ -23,6 +44,14 @@ export class ChannelBridge {
     return [
       `not-configured: no agent is bound to this ${platform} bot`,
       `fix: hiboss agent set --token <boss-token> --name <agent-name> --bind-adapter-type ${platform} --bind-adapter-token <adapter-token>`,
+    ].join("\n");
+  }
+
+  private static getDestructiveConfirmationText(): string {
+    return [
+      "检测到高风险操作（删除/清空/重置）。",
+      "请先确认，再重新发送同一条指令：",
+      "确认执行：<原指令>",
     ].join("\n");
   }
 
@@ -125,6 +154,36 @@ export class ChannelBridge {
             error: errorMessage(err),
           });
         }
+      }
+      return;
+    }
+
+    const confirmedText = stripDestructiveConfirmationPrefix(message.content.text);
+    if (confirmedText !== undefined) {
+      message = {
+        ...message,
+        content: {
+          ...message.content,
+          text: confirmedText,
+        },
+      };
+    } else if (fromBoss && hasDestructiveIntent(message.content.text)) {
+      logEvent("info", "channel-destructive-confirmation-required", {
+        "adapter-type": platform,
+        "chat-id": message.chat.id,
+      });
+
+      try {
+        await adapter.sendMessage(message.chat.id, {
+          text: ChannelBridge.getDestructiveConfirmationText(),
+        });
+      } catch (err) {
+        logEvent("warn", "channel-send-failed", {
+          "message-kind": "message",
+          "adapter-type": platform,
+          "chat-id": message.chat.id,
+          error: errorMessage(err),
+        });
       }
       return;
     }

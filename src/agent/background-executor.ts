@@ -10,6 +10,7 @@ import {
 } from "../shared/defaults.js";
 import { errorMessage, logEvent } from "../shared/daemon-log.js";
 import { executeBackgroundPrompt } from "./background-turn.js";
+import { resolveBackgroundExecutionPolicy } from "./provider-execution-policy.js";
 
 function formatAttachmentsForPrompt(envelope: Envelope): string {
   const attachments = envelope.content.attachments ?? [];
@@ -122,6 +123,10 @@ export class BackgroundExecutor {
       senderAgent.workspace?.trim() || getDefaultRuntimeWorkspace()
     );
     const prompt = buildBackgroundPrompt(envelope);
+    const executionPolicy = resolveBackgroundExecutionPolicy({
+      permissionLevel: senderAgent.permissionLevel,
+      prompt,
+    });
 
     logEvent("info", "background-job-start", {
       "envelope-id": envelope.id,
@@ -129,6 +134,8 @@ export class BackgroundExecutor {
       to: envelope.to,
       provider,
       workspace,
+      "execution-mode": executionPolicy.mode,
+      "execution-mode-reason": executionPolicy.reason,
     });
 
     let finalText: string;
@@ -139,6 +146,7 @@ export class BackgroundExecutor {
         prompt,
         model: senderAgent.model,
         reasoningEffort: senderAgent.reasoningEffort ?? undefined,
+        executionMode: executionPolicy.mode,
       });
       finalText = result.finalText?.trim() ? result.finalText.trim() : "(no response)";
     } catch (err) {
