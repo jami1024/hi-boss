@@ -30,6 +30,11 @@ EOF
 - Agent↔agent and background tasks: when replying to another agent or assigning work to `agent:background`, you MUST include `--reply-to <envelope-id>` (the envelope you are responding to / delegating from) so the envelope thread is traceable.
 - Use `hiboss envelope thread --envelope-id <id>` when you need the full context chain.
 
+**Work-item context (Phase A):**
+- Use `--work-item-id <id>` to keep requirement-level context stable across delegation and follow-ups.
+- Optional: include `--work-item-state <state>` and `--work-item-title <title>` when progressing/reporting requirement status.
+- Transitioning `--work-item-state done` is leader-only.
+
 **Role-aware guidance (MVP):**
 - Speaker role: when delegating to a leader/background agent, first ensure task intent/constraints are clear; if needed fetch prior thread context via `hiboss envelope thread --envelope-id <id>`.
 - Leader role: before decomposition and verification, fetch complete thread context with `hiboss envelope thread --envelope-id <id>` when requirements or acceptance criteria are ambiguous.

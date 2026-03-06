@@ -66,6 +66,7 @@ Notes:
 | `envelopes[].id` | string | Envelope id |
 | `envelopes[].idShort` | string | Envelope id (short id; first 8 hex chars of the UUID with hyphens removed) |
 | `envelopes[].from` | string | Sender address |
+| `envelopes[].fromAgentName` | string | Sender agent name when `from` is `agent:<name>` (or empty) |
 | `envelopes[].fromName` | string | Human-readable name: `group "<name>"` for group messages, or author name with optional `[boss]` suffix for direct messages (or empty) |
 | `envelopes[].inReplyTo` | object | Present only when the channel message is a reply (or empty) |
 | `envelopes[].inReplyTo.fromName` | string | Replied-to author display name (or empty) |

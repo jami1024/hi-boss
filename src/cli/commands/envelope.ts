@@ -33,6 +33,9 @@ export interface SendEnvelopeOptions {
   deliverAt?: string;
   parseMode?: string;
   replyTo?: string;
+  workItemId?: string;
+  workItemState?: string;
+  workItemTitle?: string;
 }
 
 export interface ListEnvelopesOptions {
@@ -78,6 +81,9 @@ export async function sendEnvelope(options: SendEnvelopeOptions): Promise<void> 
       deliverAt: options.deliverAt,
       parseMode,
       replyToEnvelopeId: options.replyTo,
+      workItemId: options.workItemId?.trim() || undefined,
+      workItemState: options.workItemState?.trim() || undefined,
+      workItemTitle: options.workItemTitle?.trim() || undefined,
     });
 
     console.log(`id: ${formatShortId(result.id)}`);

@@ -21,6 +21,7 @@ import { getTriggerFields } from "./executor-triggers.js";
 import { countDuePendingEnvelopesForAgent } from "./executor-db.js";
 import { executeCliTurn } from "./executor-turn.js";
 import { getOrCreateAgentSession } from "./executor-session.js";
+import { resolveTurnExecutionPolicy } from "./provider-execution-policy.js";
 
 /**
  * Maximum number of pending envelopes to process in a single turn.
@@ -243,11 +244,18 @@ export class AgentExecutor {
         envelopes,
       });
 
+      const executionPolicy = resolveTurnExecutionPolicy({
+        permissionLevel: agent.permissionLevel,
+        envelopes,
+      });
+
       logEvent("info", "agent-run-start", {
         "agent-name": agent.name,
         "agent-run-id": run.id,
         "envelopes-read-count": envelopeIds.length,
         "pending-remaining-count": pendingRemainingCount,
+        "execution-mode": executionPolicy.mode,
+        "execution-mode-reason": executionPolicy.reason,
         ...triggerFields,
       });
       runStartedAtMs = Date.now();
@@ -256,6 +264,7 @@ export class AgentExecutor {
       const turn = await executeCliTurn(session, turnInput, {
         hibossDir: this.hibossDir,
         agentName: agent.name,
+        executionMode: executionPolicy.mode,
         signal: inFlight.abortController.signal,
         onChildProcess: (proc) => {
           inFlight.childProcess = proc;

@@ -6,6 +6,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import * as path from "node:path";
 import type { AgentSession, TurnTokenUsage } from "./executor-support.js";
 import { readTokenUsage } from "./executor-support.js";
 import { HIBOSS_TOKEN_ENV } from "../shared/env.js";
@@ -16,6 +17,11 @@ import {
   readCodexFinalCallTokenUsageFromRollout,
 } from "./codex-rollout.js";
 import { parseClaudeOutput, parseCodexOutput } from "./provider-cli-parsers.js";
+import {
+  getClaudePermissionMode,
+  getCodexExecutionArgs,
+  type ProviderExecutionMode,
+} from "./provider-execution-policy.js";
 
 export interface CliTurnResult {
   status: "success" | "cancelled";
@@ -23,6 +29,16 @@ export interface CliTurnResult {
   usage: TurnTokenUsage;
   /** Session/thread ID extracted from output (for resume). */
   sessionId?: string;
+}
+
+export function shouldResetCodexSessionForSandbox(params: {
+  provider: "claude" | "codex";
+  executionMode: ProviderExecutionMode;
+  hasSessionId: boolean;
+}): boolean {
+  return params.provider === "codex"
+    && params.executionMode !== "full-access"
+    && params.hasSessionId;
 }
 
 /**
@@ -36,17 +52,20 @@ function buildClaudeArgs(
   session: AgentSession,
   hibossDir: string,
   agentName: string,
+  executionMode: ProviderExecutionMode,
 ): string[] {
   const args: string[] = [
     "-p",
     "--append-system-prompt", session.systemInstructions,
     "--output-format", "stream-json",
     "--verbose",
-    "--permission-mode", "bypassPermissions",
+    "--permission-mode", getClaudePermissionMode(executionMode),
   ];
 
   const internalSpaceDir = getAgentInternalSpaceDir(agentName, hibossDir);
+  const daemonDir = path.join(hibossDir, ".daemon");
   args.push("--add-dir", internalSpaceDir);
+  args.push("--add-dir", daemonDir);
 
   if (session.model) {
     args.push("--model", session.model);
@@ -68,8 +87,10 @@ function buildCodexArgs(
   turnInput: string,
   hibossDir: string,
   agentName: string,
+  executionMode: ProviderExecutionMode,
 ): string[] {
   const internalSpaceDir = getAgentInternalSpaceDir(agentName, hibossDir);
+  const daemonDir = path.join(hibossDir, ".daemon");
 
   // Config overrides (supported by both `codex exec` and `codex exec resume`).
   // NOTE: We intentionally pass `developer_instructions` on every turn so resume
@@ -81,24 +102,26 @@ function buildCodexArgs(
   }
 
   const modelArgs: string[] = session.model ? ["-m", session.model] : [];
+  const executionArgs: string[] = getCodexExecutionArgs(executionMode);
 
   if (session.sessionId) {
-    const resumeArgs: string[] = ["exec", "resume", "--json", "--skip-git-repo-check"];
-
-    // Always bypass approvals and sandboxing for reliable agent operation.
-    resumeArgs.push("--dangerously-bypass-approvals-and-sandbox");
+    const resumeArgs: string[] = [
+      ...executionArgs,
+      "exec",
+      "resume",
+      "--json",
+      "--skip-git-repo-check",
+    ];
 
     resumeArgs.push(...configArgs, ...modelArgs, session.sessionId, turnInput);
     return resumeArgs;
   }
 
-  const freshArgs: string[] = ["exec", "--json", "--skip-git-repo-check"];
-
-  // Always bypass approvals and sandboxing for reliable agent operation.
-  freshArgs.push("--dangerously-bypass-approvals-and-sandbox");
+  const freshArgs: string[] = [...executionArgs, "exec", "--json", "--skip-git-repo-check"];
 
   // Additional directories (only supported on fresh `codex exec`).
   freshArgs.push("--add-dir", internalSpaceDir);
+  freshArgs.push("--add-dir", daemonDir);
 
   freshArgs.push(...configArgs, ...modelArgs, turnInput);
   return freshArgs;
@@ -113,17 +136,28 @@ export async function executeCliTurn(
   options: {
     hibossDir: string;
     agentName: string;
+    executionMode?: ProviderExecutionMode;
     signal?: AbortSignal;
     onChildProcess?: (proc: ChildProcess) => void;
   },
 ): Promise<CliTurnResult> {
   const { hibossDir, agentName, signal } = options;
+  const executionMode = options.executionMode ?? "full-access";
+
+  if (shouldResetCodexSessionForSandbox({
+    provider: session.provider,
+    executionMode,
+    hasSessionId: Boolean(session.sessionId),
+  })) {
+    session.sessionId = undefined;
+    session.codexCumulativeUsageTotals = undefined;
+  }
 
   const cmd = session.provider === "claude" ? "claude" : "codex";
   const args =
     session.provider === "claude"
-      ? buildClaudeArgs(session, hibossDir, agentName)
-      : buildCodexArgs(session, turnInput, hibossDir, agentName);
+      ? buildClaudeArgs(session, hibossDir, agentName, executionMode)
+      : buildCodexArgs(session, turnInput, hibossDir, agentName, executionMode);
 
   const env: Record<string, string> = {
     ...process.env as Record<string, string>,

@@ -69,10 +69,25 @@ Set at registration or via agent settings:
 
 ### Provider Execution Mode (Current)
 
-Hi-Boss currently runs provider CLIs in **full-access mode** (bypassing sandboxing / permission prompts) so agents can reliably execute `hiboss` commands.
+Hi-Boss resolves execution mode per run using a hybrid policy:
 
-- Codex: `--dangerously-bypass-approvals-and-sandbox` (fresh + resume)
-- Claude: `--permission-mode bypassPermissions`
+- `full-access`
+- `workspace-sandbox`
+
+Resolution summary:
+
+1. Any non-boss channel input in the current run -> `workspace-sandbox`.
+2. Otherwise, read/search-only turn intent with non-`restricted` agent permission -> `full-access`.
+3. Otherwise -> `workspace-sandbox`.
+
+Provider flags:
+
+- Codex:
+  - `full-access`: `--dangerously-bypass-approvals-and-sandbox`
+  - `workspace-sandbox`: `--ask-for-approval never --sandbox workspace-write`
+- Claude:
+  - `full-access`: `--permission-mode bypassPermissions`
+  - `workspace-sandbox`: `--permission-mode default`
 
 Important: Claude Code CLI does not provide a Codex-style workspace-only filesystem sandbox. If you allow `Write`/`Edit`, assume the agent can write outside the intended workspace unless the `claude` process is externally sandboxed (container/VM/OS policy).
 
@@ -211,9 +226,7 @@ Behavior (canonical):
 - **Concurrency**: background jobs are executed with a default max concurrency of `4` (implementation clamps to `1..32`).
 - **No Hi-Boss system instructions**: background jobs do not receive the Hi-Boss role/system prompt injection.
 - **No Hi-Boss token**: the daemon does not set `HIBOSS_TOKEN` in the background process environment.
-- **Runtime permissions**: runs in the same non-interactive full-access mode as normal agent turns:
-  - Codex: `--dangerously-bypass-approvals-and-sandbox`
-  - Claude: `--permission-mode bypassPermissions`
+- **Runtime permissions**: read/search-only prompt + non-`restricted` sender permission uses `full-access`; all other prompts use `workspace-sandbox`.
 - **Config inheritance**: provider/model/reasoning-effort/workspace default to the **sender agent’s** settings. If sender workspace is unset, effective workspace falls back to the user's home directory.
 - **Feedback (best-effort)**: for valid sender agents, the daemon sends a feedback envelope back to the sender:
   - `from: agent:background`

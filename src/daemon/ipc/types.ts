@@ -4,6 +4,8 @@
 
 import type { Envelope } from "../../envelope/types.js";
 import type { AgentRole } from "../../shared/agent-role.js";
+import type { Project, ProjectLeaderCandidate } from "../../shared/project.js";
+import type { WorkItem, WorkItemState } from "../../shared/work-item.js";
 
 export interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -64,6 +66,9 @@ export interface EnvelopeSendParams {
   deliverAt?: string;
   parseMode?: "plain" | "markdownv2" | "html";
   replyToEnvelopeId?: string;
+  workItemId?: string;
+  workItemState?: WorkItemState;
+  workItemTitle?: string;
 }
 
 export interface EnvelopeListParams {
@@ -88,6 +93,70 @@ export interface EnvelopeThreadResult {
   truncated: boolean;
   truncatedIntermediateCount: number;
   envelopes: Envelope[];
+}
+
+export interface WorkItemListParams {
+  token: string;
+  state?: WorkItemState;
+  limit?: number;
+}
+
+export interface WorkItemListResult {
+  items: WorkItem[];
+}
+
+export interface WorkItemGetParams {
+  token: string;
+  id: string;
+}
+
+export interface WorkItemGetResult {
+  item: WorkItem;
+}
+
+export interface WorkItemUpdateParams {
+  token: string;
+  id: string;
+  state?: WorkItemState;
+  title?: string;
+  clearTitle?: boolean;
+  addChannels?: string[];
+  removeChannels?: string[];
+}
+
+export interface WorkItemUpdateResult {
+  item: WorkItem;
+}
+
+export interface ProjectListParams {
+  token: string;
+  limit?: number;
+}
+
+export interface ProjectListResult {
+  projects: Project[];
+}
+
+export interface ProjectGetParams {
+  token: string;
+  id: string;
+}
+
+export interface ProjectGetResult {
+  project: Project;
+}
+
+export interface ProjectSelectLeaderParams {
+  token: string;
+  projectId: string;
+  requiredCapabilities?: string[];
+}
+
+export interface ProjectSelectLeaderResult {
+  projectId: string;
+  requiredCapabilities: string[];
+  selected?: ProjectLeaderCandidate;
+  candidates: ProjectLeaderCandidate[];
 }
 
 export interface CronCreateParams {
@@ -342,6 +411,7 @@ export interface SetupCheckResult {
   userInfo: {
     bossName?: string;
     bossTimezone?: string;
+    adapterBossIds?: Record<string, string>;
     telegramBossId?: string;
     hasBossToken: boolean;
     missing: {
@@ -350,6 +420,7 @@ export interface SetupCheckResult {
       telegramBossId: boolean;
       bossToken: boolean;
     };
+    missingAdapterBossIds: string[];
   };
 }
 

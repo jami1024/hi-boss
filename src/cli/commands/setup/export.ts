@@ -9,13 +9,21 @@ export interface SetupExportOptions {
 }
 
 function toConfigFileV2(config: Awaited<ReturnType<typeof exportSetupConfig>>): Record<string, unknown> {
+  const telegramBossId = config.adapterBossIds.telegram;
   return {
     version: 2,
     "boss-name": config.bossName,
     "boss-timezone": config.bossTimezone,
-    telegram: {
-      "adapter-boss-id": config.telegramBossId,
-    },
+    ...(telegramBossId
+      ? {
+          telegram: {
+            "adapter-boss-id": telegramBossId,
+          },
+        }
+      : {}),
+    adapters: Object.fromEntries(
+      Object.entries(config.adapterBossIds).map(([adapterType, bossId]) => [adapterType, { "adapter-boss-id": bossId }])
+    ),
     agents: config.agents.map((agent) => ({
       name: agent.name,
       role: agent.role,

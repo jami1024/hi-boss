@@ -5,6 +5,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { HIBOSS_TOKEN_ENV } from "../shared/env.js";
 import { errorMessage, logEvent } from "../shared/daemon-log.js";
+import {
+  getClaudePermissionMode,
+  getCodexExecutionArgs,
+  type ProviderExecutionMode,
+} from "./provider-execution-policy.js";
 
 export type BackgroundProvider = "claude" | "codex";
 
@@ -14,15 +19,16 @@ export interface ExecuteBackgroundPromptParams {
   prompt: string;
   model?: string;
   reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh";
+  executionMode?: ProviderExecutionMode;
   signal?: AbortSignal;
   onChildProcess?: (proc: ChildProcess) => void;
 }
 
-function buildClaudeArgs(params: { model?: string }): string[] {
+function buildClaudeArgs(params: { model?: string; executionMode: ProviderExecutionMode }): string[] {
   const args: string[] = [
     "-p",
     "--output-format", "text",
-    "--permission-mode", "bypassPermissions",
+    "--permission-mode", getClaudePermissionMode(params.executionMode),
   ];
 
   if (params.model) {
@@ -37,11 +43,15 @@ function buildCodexArgs(params: {
   model?: string;
   reasoningEffort?: string;
   outputLastMessagePath: string;
+  executionMode: ProviderExecutionMode;
 }): string[] {
-  const args: string[] = ["exec", "--skip-git-repo-check", "-o", params.outputLastMessagePath];
-
-  // Non-interactive execution (no approvals/sandbox prompts).
-  args.push("--dangerously-bypass-approvals-and-sandbox");
+  const args: string[] = [
+    ...getCodexExecutionArgs(params.executionMode),
+    "exec",
+    "--skip-git-repo-check",
+    "-o",
+    params.outputLastMessagePath,
+  ];
 
   if (params.reasoningEffort) {
     args.push("-c", `model_reasoning_effort="${params.reasoningEffort}"`);
@@ -64,10 +74,11 @@ function buildTempOutputPath(): string {
  */
 export async function executeBackgroundPrompt(params: ExecuteBackgroundPromptParams): Promise<{ finalText: string }> {
   const cmd = params.provider === "claude" ? "claude" : "codex";
+  const executionMode = params.executionMode ?? "full-access";
   let outputLastMessagePath: string | undefined;
   const args =
     params.provider === "claude"
-      ? buildClaudeArgs({ model: params.model })
+      ? buildClaudeArgs({ model: params.model, executionMode })
       : (() => {
           outputLastMessagePath = buildTempOutputPath();
           return buildCodexArgs({
@@ -75,6 +86,7 @@ export async function executeBackgroundPrompt(params: ExecuteBackgroundPromptPar
             model: params.model,
             reasoningEffort: params.reasoningEffort,
             outputLastMessagePath,
+            executionMode,
           });
         })();
 

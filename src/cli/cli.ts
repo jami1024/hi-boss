@@ -18,6 +18,12 @@ import {
   setReaction,
   runSetup,
   runSetupConfigExport,
+  listWorkItems,
+  getWorkItem,
+  updateWorkItem,
+  listProjects,
+  getProject,
+  selectProjectLeader,
 } from "./commands/index.js";
 import { registerAgentCommands } from "./cli-agent.js";
 
@@ -62,9 +68,17 @@ daemon
   .command("start")
   .description("Start the daemon")
   .option("--token <token>", "Token (defaults to HIBOSS_TOKEN)")
+  .option(
+    "--config-file <path>",
+    "Apply/reconcile setup config before start and record it for auto-load"
+  )
   .option("--debug", "Include debug fields in daemon.log")
   .action((options) => {
-    startDaemon({ token: options.token, debug: Boolean(options.debug) });
+    startDaemon({
+      token: options.token,
+      configFile: options.configFile,
+      debug: Boolean(options.debug),
+    });
   });
 
 daemon
@@ -105,6 +119,12 @@ envelope
     "--reply-to <envelope-id>",
     "Reply to an envelope (optional; provides thread context; may quote for channels when possible)"
   )
+  .option("--work-item-id <id>", "Attach work item id to envelope metadata (main-agent orchestration)")
+  .option(
+    "--work-item-state <state>",
+    "Attach work item state to envelope metadata (new|triaged|in-progress|awaiting-user|blocked|done|archived)"
+  )
+  .option("--work-item-title <title>", "Attach work item title to envelope metadata")
   .option(
     "--deliver-at <time>",
     "Schedule delivery time (ISO 8601 or relative: +2h, +30m, +1Y2M, -15m; units: Y/M/D/h/m/s)"
@@ -130,6 +150,9 @@ envelope
       deliverAt: options.deliverAt,
       parseMode: options.parseMode,
       replyTo: options.replyTo,
+      workItemId: options.workItemId,
+      workItemState: options.workItemState,
+      workItemTitle: options.workItemTitle,
     });
   });
 
@@ -321,6 +344,123 @@ const setup = program
       configFile: options.configFile,
       token: options.token,
       dryRun: Boolean(options.dryRun),
+    });
+  });
+
+const workItem = program
+  .command("work-item")
+  .description("Persistent work item operations")
+  .helpCommand(false);
+
+workItem
+  .command("list")
+  .description("List work items")
+  .option("--token <token>", "Token (defaults to HIBOSS_TOKEN)")
+  .option(
+    "--state <state>",
+    "Filter by state (new|triaged|in-progress|awaiting-user|blocked|done|archived)"
+  )
+  .option("-n, --limit <n>", "Maximum number of results (default 50, max 200)", parseInt, 50)
+  .action((options) => {
+    listWorkItems({
+      token: options.token,
+      state: options.state,
+      limit: options.limit,
+    });
+  });
+
+workItem
+  .command("get")
+  .description("Get a work item by id")
+  .requiredOption("--id <id>", "Work item id")
+  .option("--token <token>", "Token (defaults to HIBOSS_TOKEN)")
+  .action((options) => {
+    getWorkItem({
+      token: options.token,
+      id: options.id,
+    });
+  });
+
+workItem
+  .command("update")
+  .description("Update work item state/title")
+  .requiredOption("--id <id>", "Work item id")
+  .option("--token <token>", "Token (defaults to HIBOSS_TOKEN)")
+  .option(
+    "--state <state>",
+    "Set state (new|triaged|in-progress|awaiting-user|blocked|done|archived)"
+  )
+  .option("--title <title>", "Set title")
+  .option("--clear-title", "Clear title")
+  .option(
+    "--add-channel <address>",
+    "Add allowed destination channel for this work item (can be used multiple times)",
+    collect,
+    []
+  )
+  .option(
+    "--remove-channel <address>",
+    "Remove allowed destination channel for this work item (can be used multiple times)",
+    collect,
+    []
+  )
+  .action((options) => {
+    updateWorkItem({
+      token: options.token,
+      id: options.id,
+      state: options.state,
+      title: options.title,
+      clearTitle: Boolean(options.clearTitle),
+      addChannels: options.addChannel,
+      removeChannels: options.removeChannel,
+    });
+  });
+
+const project = program
+  .command("project")
+  .description("Project-scoped orchestration views")
+  .helpCommand(false);
+
+project
+  .command("list")
+  .description("List projects")
+  .option("--token <token>", "Token (defaults to HIBOSS_TOKEN)")
+  .option("-n, --limit <n>", "Maximum number of results (default 50, max 200)", parseInt, 50)
+  .action((options) => {
+    listProjects({
+      token: options.token,
+      limit: options.limit,
+    });
+  });
+
+project
+  .command("get")
+  .description("Get a project by id")
+  .requiredOption("--id <id>", "Project id")
+  .option("--token <token>", "Token (defaults to HIBOSS_TOKEN)")
+  .action((options) => {
+    getProject({
+      token: options.token,
+      id: options.id,
+    });
+  });
+
+project
+  .command("select-leader")
+  .description("Select best leader for a project")
+  .requiredOption("--project-id <id>", "Project id")
+  .option("--token <token>", "Token (defaults to HIBOSS_TOKEN)")
+  .option(
+    "--require-capability <capability>",
+    "Required capability tag (can be used multiple times)",
+    collect,
+    []
+  )
+  .action((options) => {
+    selectProjectLeader({
+      token: options.token,
+      projectId: options.projectId,
+      requiredCapabilities: options.requireCapability,
     });
   });
 

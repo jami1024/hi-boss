@@ -45,7 +45,8 @@ See `docs/spec/adapters/telegram.md`.
 2. `TelegramAdapter` creates a `ChannelMessage` (text + optional attachments).
 3. `ChannelBridge.handleChannelMessage()`:
    - Finds which agent is bound to that bot token (`agent_bindings`)
-   - Computes `from-boss` by comparing the sender username with `config.adapter_boss_id_telegram`
+   - Computes `from-boss` by comparing sender identity with `config.adapter_boss_id_<adapter-type>`
+   - For boss-origin high-risk destructive intents (delete/clear/reset), requires explicit confirmation prefix and sends a confirmation hint instead of routing when missing.
    - Creates an envelope:
      - `from = channel:telegram:<chat-id>`
      - `to = agent:<bound-agent-name>`
@@ -59,6 +60,11 @@ If no binding exists:
 
 - The message is dropped.
 - If `from-boss: true`, the adapter receives a “not-configured” message telling you how to bind an agent.
+
+Destructive confirmation format:
+
+- Send: `确认执行：<原指令>`
+- The confirmation prefix is stripped before envelope routing.
 
 ---
 

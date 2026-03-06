@@ -13,6 +13,9 @@ Core (top-level):
 - `docs/spec/index.md` — spec entrypoint + map
 - `docs/spec/goals.md` — product goals, non-goals, principles
 - `docs/spec/architecture.md` — system architecture + invariants
+- `docs/spec/requirements/main-agent-feishu-orchestration.md` — draft requirements for main-agent orchestration + Feishu group workflow
+- `docs/spec/requirements/main-agent-feishu-orchestration-audit.md` — implementation coverage audit for FR/Phase/AC
+- `docs/spec/requirements/project-scoped-speaker-multi-leader-plan.md` — project-scoped speaker + multi-leader implementation proposal
 - `docs/spec/envelope.md` — envelope concept, lifecycle, and semantics
 - `docs/spec/conventions.md` — naming, IDs, boss marker
 - `docs/spec/definitions.md` — field mappings (TypeScript <-> SQLite <-> CLI output keys)

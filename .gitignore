@@ -2,6 +2,7 @@
 .profile
 default_setup.json
 note.md
+hiboss.config.json
 
 # macOS
 .DS_Store

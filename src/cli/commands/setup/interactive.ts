@@ -1,5 +1,5 @@
 import * as path from "path";
-import { input, password } from "@inquirer/prompts";
+import { input, password, select } from "@inquirer/prompts";
 import { AGENT_NAME_ERROR_MESSAGE, isValidAgentName } from "../../../shared/validation.js";
 import {
   DEFAULT_SETUP_AGENT_NAME,
@@ -18,6 +18,7 @@ import {
   promptAgentProvider,
   promptAgentReasoningEffort,
 } from "./agent-options-prompts.js";
+import { SUPPORTED_ADAPTER_TYPES } from "../../../adapters/registry.js";
 
 export async function runInteractiveSetup(): Promise<void> {
   console.log("\n🚀 Hi-Boss Setup Wizard\n");
@@ -41,7 +42,11 @@ export async function runInteractiveSetup(): Promise<void> {
   const hasPersistedState =
     setupStatus.completed ||
     setupStatus.agents.length > 0 ||
-    Object.values(setupStatus.userInfo.missing).some((v) => !v);
+    Boolean(setupStatus.userInfo.bossName?.trim()) ||
+    Boolean(setupStatus.userInfo.bossTimezone?.trim()) ||
+    Boolean(setupStatus.userInfo.telegramBossId?.trim()) ||
+    Boolean(setupStatus.userInfo.adapterBossIds && Object.keys(setupStatus.userInfo.adapterBossIds).length > 0) ||
+    setupStatus.userInfo.hasBossToken;
 
   if (hasPersistedState) {
     console.error("\n❌ Interactive setup only supports first-time bootstrap on a clean state.\n");
@@ -81,12 +86,25 @@ export async function runInteractiveSetup(): Promise<void> {
     })
   ).trim();
 
-  const adapterBossId = (
+  const adapterType = await select<(typeof SUPPORTED_ADAPTER_TYPES)[number]>({
+    message: "Channel adapter type:",
+    choices: SUPPORTED_ADAPTER_TYPES.map((value) => ({ value, name: value })),
+    default: "telegram",
+  });
+
+  const adapterBossIdPrompt =
+    adapterType === "telegram"
+      ? "Your Telegram username (to identify you as the boss):"
+      : "Your Feishu user id/open id (to identify you as the boss):";
+  const adapterBossIdRequiredMessage =
+    adapterType === "telegram" ? "Telegram username is required" : "Feishu user id/open id is required";
+  const rawAdapterBossId = (
     await input({
-      message: "Your Telegram username (to identify you as the boss):",
-      validate: (value) => (value.trim().length === 0 ? "Telegram username is required" : true),
+      message: adapterBossIdPrompt,
+      validate: (value) => (value.trim().length === 0 ? adapterBossIdRequiredMessage : true),
     })
-  ).trim().replace(/^@/, "");
+  ).trim();
+  const adapterBossId = adapterType === "telegram" ? rawAdapterBossId.replace(/^@/, "") : rawAdapterBossId;
 
   console.log("\n🔐 Boss Token\n");
   console.log("The boss token identifies you as the boss for administrative tasks.");
@@ -143,19 +161,34 @@ export async function runInteractiveSetup(): Promise<void> {
 
   const speakerAdvanced = await promptAgentAdvancedOptions({ agentLabel: "Speaker" });
 
-  console.log("\n📱 Telegram Binding\n");
-  console.log("\n📋 To create a Telegram bot:");
-  console.log("   1. Open Telegram and search for @BotFather");
-  console.log("   2. Send /newbot and follow the instructions");
-  console.log("   3. Copy the bot token (looks like: 123456789:ABCdef...)\n");
+  if (adapterType === "telegram") {
+    console.log("\n📱 Telegram Binding\n");
+    console.log("\n📋 To create a Telegram bot:");
+    console.log("   1. Open Telegram and search for @BotFather");
+    console.log("   2. Send /newbot and follow the instructions");
+    console.log("   3. Copy the bot token (looks like: 123456789:ABCdef...)\n");
+  } else {
+    console.log("\n📱 Feishu Binding\n");
+    console.log("\n📋 Feishu adapter token format:");
+    console.log("   - app_id:app_secret");
+    console.log("   - or JSON with app_id/app_secret and optional webhook fields\n");
+  }
 
   const adapterToken = (
     await input({
-      message: "Enter your Telegram bot token:",
-      validate: (value) =>
-        /^\d+:[A-Za-z0-9_-]+$/.test(value.trim())
-          ? true
-          : "Invalid token format. Should look like: 123456789:ABCdef...",
+      message: adapterType === "telegram" ? "Enter your Telegram bot token:" : "Enter your Feishu adapter token:",
+      validate: (value) => {
+        const trimmed = value.trim();
+        if (!trimmed) {
+          return "Adapter token is required";
+        }
+        if (adapterType === "telegram") {
+          return /^\d+:[A-Za-z0-9_-]+$/.test(trimmed)
+            ? true
+            : "Invalid token format. Should look like: 123456789:ABCdef...";
+        }
+        return true;
+      },
     })
   ).trim();
 
@@ -233,7 +266,7 @@ export async function runInteractiveSetup(): Promise<void> {
       metadata: leaderAdvanced.metadata,
     },
     adapter: {
-      adapterType: "telegram",
+      adapterType,
       adapterToken,
       adapterBossId,
     },
@@ -254,7 +287,7 @@ export async function runInteractiveSetup(): Promise<void> {
     console.log(`   boss-token:  ${bossToken}`);
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     console.log("\n⚠️  Save these tokens! They won't be shown again.\n");
-    console.log("📱 Telegram bot is configured. Start the daemon with:");
+    console.log(`📱 ${adapterType} adapter is configured. Start the daemon with:`);
     console.log("   hiboss daemon start\n");
   } catch (err) {
     const error = err as Error;

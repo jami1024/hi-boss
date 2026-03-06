@@ -2,6 +2,7 @@
  * Envelope and message RPC handlers.
  */
 
+import path from "node:path";
 import type {
   RpcMethodRegistry,
   EnvelopeSendParams,
@@ -15,8 +16,30 @@ import { requireToken, rpcError } from "./context.js";
 import { formatAgentAddress, parseAddress } from "../../adapters/types.js";
 import { parseDateTimeInputToUnixMsInTimeZone } from "../../shared/time.js";
 import { BACKGROUND_AGENT_NAME } from "../../shared/defaults.js";
+import { parseAgentRoleFromMetadata } from "../../shared/agent-role.js";
+import { logEvent } from "../../shared/daemon-log.js";
 import { resolveEnvelopeIdInput } from "./resolve-envelope-id.js";
 import type { Envelope } from "../../envelope/types.js";
+import {
+  deriveProjectIdFromRoot,
+  inferMainGroupChannel,
+  inferRequirementGroupChannel,
+  normalizeWorkspacePath,
+  parseCapabilityHint,
+  parseProjectRootHint,
+} from "./work-item-orchestration.js";
+import {
+  canRoleSetWorkItemState,
+  canStartWorkItemWithState,
+  canTransitionWorkItemState,
+  extractWorkItemEnvelopeFields,
+  isWorkItemState,
+  mergeWorkItemEnvelopeFields,
+  normalizeWorkItemId,
+  normalizeWorkItemTitle,
+  resolveWorkItemChannelPolicy,
+  type WorkItemEnvelopeFields,
+} from "../../shared/work-item.js";
 
 function parseEnvelopeListTimeBoundary(params: {
   raw: unknown;
@@ -35,6 +58,42 @@ function parseEnvelopeListTimeBoundary(params: {
     const message = rawMessage.replace(/^Invalid deliver-at:/, `Invalid ${params.flag}:`);
     rpcError(RPC_ERRORS.INVALID_PARAMS, message);
   }
+}
+
+function requireAgentRole(agentName: string, metadata: Record<string, unknown> | undefined): "speaker" | "leader" {
+  const role = parseAgentRoleFromMetadata(metadata);
+  if (!role) {
+    rpcError(
+      RPC_ERRORS.INTERNAL_ERROR,
+      `Agent '${agentName}' is missing required role metadata. Run: hiboss agent set --name ${agentName} --role <speaker|leader>`
+    );
+  }
+  return role;
+}
+
+function resolveComparableProjectRoot(value?: string): string | undefined {
+  if (!value) return undefined;
+  try {
+    return normalizeWorkspacePath(value);
+  } catch {
+    return value.trim() || undefined;
+  }
+}
+
+function deriveProjectDisplayName(projectRoot: string): string {
+  const name = path.basename(projectRoot.trim());
+  return name || projectRoot;
+}
+
+function parseCapabilityList(capabilityHint?: string): string[] {
+  if (!capabilityHint) return [];
+  return capabilityHint
+    .split(/[;,]/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .map((item) => item.toLowerCase())
+    .filter((value, index, all) => all.indexOf(value) === index)
+    .sort((a, b) => a.localeCompare(b));
 }
 
 /**
@@ -131,11 +190,293 @@ export function createEnvelopeHandlers(ctx: DaemonContext): RpcMethodRegistry {
       metadata.parseMode = mode;
     }
 
+    let replyToEnvelope: Envelope | null = null;
     if (p.replyToEnvelopeId !== undefined) {
       if (typeof p.replyToEnvelopeId !== "string" || !p.replyToEnvelopeId.trim()) {
         rpcError(RPC_ERRORS.INVALID_PARAMS, "Invalid reply-to-envelope-id");
       }
-      metadata.replyToEnvelopeId = resolveEnvelopeIdInput(ctx.db, p.replyToEnvelopeId.trim());
+      const resolvedReplyToEnvelopeId = resolveEnvelopeIdInput(ctx.db, p.replyToEnvelopeId.trim());
+      metadata.replyToEnvelopeId = resolvedReplyToEnvelopeId;
+      replyToEnvelope = ctx.db.getEnvelopeById(resolvedReplyToEnvelopeId);
+    }
+
+    const workItemFields: WorkItemEnvelopeFields = {};
+    if (p.workItemId !== undefined) {
+      if (typeof p.workItemId !== "string") {
+        rpcError(RPC_ERRORS.INVALID_PARAMS, "Invalid work-item-id");
+      }
+      const normalized = normalizeWorkItemId(p.workItemId);
+      if (!normalized) {
+        rpcError(
+          RPC_ERRORS.INVALID_PARAMS,
+          "Invalid work-item-id (expected lowercase letters/numbers with optional . _ : -)"
+        );
+      }
+      workItemFields.workItemId = normalized;
+    }
+
+    if (p.workItemState !== undefined) {
+      if (typeof p.workItemState !== "string" || !isWorkItemState(p.workItemState)) {
+        rpcError(
+          RPC_ERRORS.INVALID_PARAMS,
+          "Invalid work-item-state (expected new, triaged, in-progress, awaiting-user, blocked, done, archived)"
+        );
+      }
+      workItemFields.workItemState = p.workItemState;
+    }
+
+    if (p.workItemTitle !== undefined) {
+      if (typeof p.workItemTitle !== "string") {
+        rpcError(RPC_ERRORS.INVALID_PARAMS, "Invalid work-item-title");
+      }
+      const normalized = normalizeWorkItemTitle(p.workItemTitle);
+      if (!normalized) {
+        rpcError(RPC_ERRORS.INVALID_PARAMS, "Invalid work-item-title (expected non-empty title up to 200 chars)");
+      }
+      workItemFields.workItemTitle = normalized;
+    }
+
+    if (!workItemFields.workItemId && replyToEnvelope) {
+      const inherited = extractWorkItemEnvelopeFields(replyToEnvelope.metadata);
+      if (inherited.workItemId) {
+        workItemFields.workItemId = inherited.workItemId;
+      }
+    }
+
+    if (!workItemFields.workItemId && (workItemFields.workItemState || workItemFields.workItemTitle)) {
+      rpcError(RPC_ERRORS.INVALID_PARAMS, "work-item-state/work-item-title require --work-item-id");
+    }
+
+    let existingWorkItem = workItemFields.workItemId
+      ? ctx.db.getWorkItemById(workItemFields.workItemId)
+      : null;
+
+    let senderRoleCache: "speaker" | "leader" | undefined;
+    const getSenderRole = (): "speaker" | "leader" => {
+      senderRoleCache ??= requireAgentRole(agent.name, agent.metadata);
+      return senderRoleCache;
+    };
+
+    const replyWorkItemFields = replyToEnvelope
+      ? extractWorkItemEnvelopeFields(replyToEnvelope.metadata)
+      : {};
+    const projectRootHint = parseProjectRootHint(p.text);
+    const capabilityHint = parseCapabilityHint(p.text);
+    const capabilityList = parseCapabilityList(capabilityHint);
+
+    const senderWorkspace =
+      typeof agent.workspace === "string" && agent.workspace.trim()
+        ? resolveComparableProjectRoot(agent.workspace)
+        : undefined;
+
+    let effectiveProjectRoot = resolveComparableProjectRoot(existingWorkItem?.projectRoot) ?? projectRootHint;
+    if (!effectiveProjectRoot && getSenderRole() === "leader") {
+      effectiveProjectRoot = senderWorkspace;
+    }
+    const effectiveProjectId = existingWorkItem?.projectId ??
+      (effectiveProjectRoot ? deriveProjectIdFromRoot(effectiveProjectRoot) : undefined);
+    let effectiveOrchestratorAgent = existingWorkItem?.orchestratorAgent;
+    if (!effectiveOrchestratorAgent && !existingWorkItem) {
+      effectiveOrchestratorAgent = agent.name;
+    } else if (!effectiveOrchestratorAgent && existingWorkItem && getSenderRole() === "speaker") {
+      effectiveOrchestratorAgent = agent.name;
+    }
+    const effectiveMainGroupChannel = inferMainGroupChannel({
+      existingWorkItem,
+      replyToEnvelope,
+      destinationAddress: to,
+    });
+    const effectiveRequirementGroupChannel = inferRequirementGroupChannel({
+      existingWorkItem,
+      mainGroupChannel: effectiveMainGroupChannel,
+      destinationAddress: to,
+    });
+
+    if (
+      workItemFields.workItemId &&
+      replyToEnvelope &&
+      replyWorkItemFields.workItemId &&
+      replyWorkItemFields.workItemId !== workItemFields.workItemId
+    ) {
+      const replyWorkItem = ctx.db.getWorkItemById(replyWorkItemFields.workItemId);
+      const replyProjectRoot = resolveComparableProjectRoot(replyWorkItem?.projectRoot);
+      const replyProjectId = replyWorkItem?.projectId;
+      const hasCurrentProjectContext = Boolean(effectiveProjectRoot) || Boolean(effectiveProjectId);
+      const hasReplyProjectContext = Boolean(replyProjectRoot) || Boolean(replyProjectId);
+      if (!replyWorkItem || !hasCurrentProjectContext || !hasReplyProjectContext) {
+        rpcError(
+          RPC_ERRORS.INVALID_PARAMS,
+          "Cannot verify project boundary for reply-to work item linkage"
+        );
+      }
+      const crossProjectByRoot =
+        Boolean(effectiveProjectRoot) && Boolean(replyProjectRoot) && effectiveProjectRoot !== replyProjectRoot;
+      const crossProjectById =
+        Boolean(effectiveProjectId) && Boolean(replyProjectId) && effectiveProjectId !== replyProjectId;
+      if (crossProjectByRoot || crossProjectById) {
+        rpcError(
+          RPC_ERRORS.INVALID_PARAMS,
+          "Cross-project reply-to is not allowed when sending with work-item-id"
+        );
+      }
+    }
+
+    if (workItemFields.workItemId && getSenderRole() === "leader" && effectiveProjectRoot) {
+      if (!senderWorkspace || senderWorkspace !== effectiveProjectRoot) {
+        rpcError(
+          RPC_ERRORS.UNAUTHORIZED,
+          "Leader workspace does not match work item project-root"
+        );
+      }
+    }
+
+    if (
+      workItemFields.workItemId &&
+      existingWorkItem &&
+      !existingWorkItem.orchestratorAgent &&
+      (existingWorkItem.projectId || existingWorkItem.projectRoot) &&
+      getSenderRole() !== "speaker"
+    ) {
+      rpcError(
+        RPC_ERRORS.UNAUTHORIZED,
+        "Work item orchestrator is not initialized; speaker must rebind the work item context"
+      );
+    }
+
+    if (
+      workItemFields.workItemId &&
+      existingWorkItem &&
+      (existingWorkItem.projectId || existingWorkItem.projectRoot) &&
+      existingWorkItem.orchestratorAgent &&
+      agent.name !== existingWorkItem.orchestratorAgent &&
+      !ctx.db.isWorkItemSpecialistAssigned(workItemFields.workItemId, agent.name)
+    ) {
+      rpcError(
+        RPC_ERRORS.UNAUTHORIZED,
+        "Agent is not a member of this work item project context"
+      );
+    }
+
+    if (
+      workItemFields.workItemId &&
+      existingWorkItem &&
+      getSenderRole() === "leader" &&
+      effectiveOrchestratorAgent &&
+      agent.name !== effectiveOrchestratorAgent
+    ) {
+      if (!ctx.db.isWorkItemSpecialistAssigned(workItemFields.workItemId, agent.name)) {
+        rpcError(
+          RPC_ERRORS.UNAUTHORIZED,
+          "Specialist leader is not assigned to this work-item-id"
+        );
+      }
+
+      if (!replyToEnvelope) {
+        rpcError(
+          RPC_ERRORS.INVALID_PARAMS,
+          "Specialist leader updates require --reply-to delegated envelope"
+        );
+      }
+
+      const replyToWorkItemId = replyWorkItemFields.workItemId;
+      const expectedDestination = formatAgentAddress(agent.name);
+      if (replyToWorkItemId !== workItemFields.workItemId || replyToEnvelope.to !== expectedDestination) {
+        rpcError(
+          RPC_ERRORS.INVALID_PARAMS,
+          "Specialist leader updates must reply to a delegated envelope for the same work item"
+        );
+      }
+    }
+
+    if (workItemFields.workItemState) {
+      const role = getSenderRole();
+      if (!canRoleSetWorkItemState(role, workItemFields.workItemState)) {
+        rpcError(RPC_ERRORS.UNAUTHORIZED, "Only leader role can transition work item to done");
+      }
+
+      if (existingWorkItem) {
+        if (!canTransitionWorkItemState(existingWorkItem.state, workItemFields.workItemState)) {
+          rpcError(
+            RPC_ERRORS.INVALID_PARAMS,
+            `Invalid work-item-state transition (${existingWorkItem.state} -> ${workItemFields.workItemState})`
+          );
+        }
+      } else if (!canStartWorkItemWithState(workItemFields.workItemState)) {
+        rpcError(
+          RPC_ERRORS.INVALID_PARAMS,
+          `Invalid work-item-state transition (none -> ${workItemFields.workItemState})`
+        );
+      }
+    }
+
+    if (destination.type === "channel" && workItemFields.workItemId) {
+      if (!existingWorkItem) {
+        existingWorkItem = ctx.db.upsertWorkItem({
+          id: workItemFields.workItemId,
+          state: workItemFields.workItemState,
+          title: workItemFields.workItemTitle,
+          projectId: effectiveProjectId,
+          projectRoot: effectiveProjectRoot,
+          orchestratorAgent: effectiveOrchestratorAgent,
+          mainGroupChannel: effectiveMainGroupChannel,
+          requirementGroupChannel: effectiveRequirementGroupChannel,
+          actor: agent.name,
+          reason: "envelope-send-pre-channel-policy",
+        });
+      }
+
+      const knownChannels = ctx.db.listChannelAddressesForWorkItem(workItemFields.workItemId);
+      const strictAllowlist = ctx.db.isWorkItemChannelAllowlistStrict(workItemFields.workItemId);
+      const policy = resolveWorkItemChannelPolicy({
+        senderRole: getSenderRole(),
+        destinationChannelAddress: to,
+        knownChannelAddresses: knownChannels,
+        strictAllowlist,
+      });
+
+      if (!policy.allowed) {
+        logEvent("warn", "work-item-channel-denied", {
+          "agent-name": agent.name,
+          "work-item-id": workItemFields.workItemId,
+          to,
+          "known-channels-count": knownChannels.length,
+        });
+        rpcError(
+          RPC_ERRORS.UNAUTHORIZED,
+          `Channel destination not allowed for work item '${workItemFields.workItemId}'`
+        );
+      }
+
+      if (policy.extendsAllowlist && !knownChannels.includes(to)) {
+        ctx.db.addChannelAddressToWorkItemAllowlist({
+          workItemId: workItemFields.workItemId,
+          channelAddress: to,
+          createdByAgent: agent.name,
+        });
+
+        if (knownChannels.length === 0) {
+          logEvent("info", "work-item-channel-allowlist-seeded", {
+            "agent-name": agent.name,
+            "work-item-id": workItemFields.workItemId,
+            to,
+            role: getSenderRole(),
+          });
+        } else {
+          logEvent("info", "work-item-channel-allowlist-extended", {
+            "agent-name": agent.name,
+            "work-item-id": workItemFields.workItemId,
+            to,
+            role: getSenderRole(),
+          });
+        }
+      }
+    }
+
+    if (workItemFields.workItemId) {
+      const merged = mergeWorkItemEnvelopeFields({ metadata, fields: workItemFields });
+      for (const [k, v] of Object.entries(merged)) {
+        metadata[k] = v;
+      }
     }
 
     let deliverAt: number | undefined;
@@ -151,6 +492,64 @@ export function createEnvelopeHandlers(ctx: DaemonContext): RpcMethodRegistry {
     }
 
     const finalMetadata = Object.keys(metadata).length > 0 ? metadata : undefined;
+
+    if (workItemFields.workItemId) {
+      existingWorkItem = ctx.db.upsertWorkItem({
+        id: workItemFields.workItemId,
+        state: workItemFields.workItemState,
+        title: workItemFields.workItemTitle,
+        projectId: effectiveProjectId,
+        projectRoot: effectiveProjectRoot,
+        orchestratorAgent: effectiveOrchestratorAgent,
+        mainGroupChannel: effectiveMainGroupChannel,
+        requirementGroupChannel: effectiveRequirementGroupChannel,
+        actor: agent.name,
+        reason: "envelope-send-upsert",
+      });
+
+      if (effectiveProjectId && effectiveProjectRoot && effectiveOrchestratorAgent) {
+        ctx.db.upsertProject({
+          id: effectiveProjectId,
+          name: deriveProjectDisplayName(effectiveProjectRoot),
+          root: effectiveProjectRoot,
+          speakerAgent: effectiveOrchestratorAgent,
+          mainGroupChannel: effectiveMainGroupChannel,
+        });
+
+        if (effectiveOrchestratorAgent !== agent.name && getSenderRole() === "leader") {
+          ctx.db.upsertProjectLeader({
+            projectId: effectiveProjectId,
+            agentName: agent.name,
+            capabilities: capabilityList,
+            active: true,
+          });
+        }
+      }
+
+      if (destination.type === "agent" && getSenderRole() === "speaker") {
+        const destinationAgent =
+          destination.agentName.toLowerCase() === BACKGROUND_AGENT_NAME
+            ? null
+            : ctx.db.getAgentByNameCaseInsensitive(destination.agentName);
+        if (destinationAgent && parseAgentRoleFromMetadata(destinationAgent.metadata) === "leader") {
+          ctx.db.upsertWorkItemSpecialistAssignment({
+            workItemId: workItemFields.workItemId,
+            agentName: destinationAgent.name,
+            capability: capabilityHint,
+            assignedBy: agent.name,
+          });
+
+          if (effectiveProjectId) {
+            ctx.db.upsertProjectLeader({
+              projectId: effectiveProjectId,
+              agentName: destinationAgent.name,
+              capabilities: capabilityList,
+              active: true,
+            });
+          }
+        }
+      }
+    }
 
     try {
       const envelope = await ctx.router.routeEnvelope({

@@ -29,6 +29,12 @@
 - Provider CLIs (canonical invocation + token semantics): `docs/spec/provider-clis.md`
 - File-based agent memory (protocol): `docs/spec/components/file-memory.md`
 
+## Requirements drafts
+
+- Main-agent orchestration + Feishu group workflow: `docs/spec/requirements/main-agent-feishu-orchestration.md`
+- Coverage audit (FR/Phase/AC matrix): `docs/spec/requirements/main-agent-feishu-orchestration-audit.md`
+- Project-scoped speaker + multi-leader proposal: `docs/spec/requirements/project-scoped-speaker-multi-leader-plan.md`
+
 ## Configuration + storage
 
 - Configuration index: `docs/spec/configuration.md`
@@ -48,3 +54,4 @@
 ## Adapters
 
 - Telegram adapter: `docs/spec/adapters/telegram.md`
+- Feishu adapter: `docs/spec/adapters/feishu.md`
