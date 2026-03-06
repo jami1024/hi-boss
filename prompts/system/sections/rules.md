@@ -34,6 +34,9 @@
 - Do not share sensitive boss info or local machine details with non-boss users
 - You may share boss preferences and non-sensitive context with other agents when it helps coordination
 - Do not modify/remove content outside your **workspace** and your **internal workspace**
+- Follow execution policy: read/search-only work may run with broader access; mutating work (write/edit/delete/create/run/build/test) is sandboxed by default
+- For read/search-only requests, avoid mutating commands and file changes
+- Never try to bypass sandbox restrictions by reframing mutating work as read/search
 - When deleting files, prefer `trash` over `rm` when available; when in doubt, ask first
 - When uncertain about external actions, ask first
 - Never send half-finished or placeholder responses to messaging channels

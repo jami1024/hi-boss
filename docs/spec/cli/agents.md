@@ -1,6 +1,6 @@
 # CLI: Agents
 
-Note: Hi-Boss currently runs provider CLIs in **full-access mode** (bypassing sandboxing / permission prompts) so agents can reliably execute `hiboss` commands.
+Note: Hi-Boss uses a **hybrid execution policy** per run. Non-boss channel inputs are forced to workspace-sandbox mode; trusted boss-channel inputs may run full-access for operational continuity, and read/search-only runs may use full-access when permission allows (details: `docs/spec/provider-clis.md`).
 
 ## `hiboss agent register`
 
@@ -18,7 +18,7 @@ Flags:
 - `--permission-level <restricted|standard|privileged|boss>` (optional; `boss` requires boss-privileged token)
 - `--metadata-json <json>` or `--metadata-file <path>` (optional)
 - Optional binding at creation:
-  - `--bind-adapter-type <type>`
+  - `--bind-adapter-type <type>` (e.g. `telegram`, `feishu`)
   - `--bind-adapter-token <token>`
 - Optional session policy inputs:
   - `--session-daily-reset-at HH:MM`
@@ -82,8 +82,8 @@ Flags:
   - `--metadata-json <json>` or `--metadata-file <path>` (optional)
   - `--clear-metadata` (optional)
 - Binding:
-  - `--bind-adapter-type <type>` + `--bind-adapter-token <token>` (optional)
-  - `--unbind-adapter-type <type>` (optional)
+  - `--bind-adapter-type <type>` + `--bind-adapter-token <token>` (optional; e.g. `telegram`, `feishu`)
+  - `--unbind-adapter-type <type>` (optional; e.g. `telegram`, `feishu`)
 
 Notes:
 - Updating `--provider`, `--model`, or `--reasoning-effort` does **not** force a session refresh. Existing/resumed sessions may continue using the previous session config until a refresh (`/new`) or policy refresh opens a new session.

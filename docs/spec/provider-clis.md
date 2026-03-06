@@ -36,28 +36,54 @@ To keep behavior stable, Hi-Boss clears provider-home override env vars when spa
 
 ## Runtime controls (canonical)
 
-Hi-Boss runs provider CLIs in full-access mode so agents can reliably execute `hiboss` commands.
+Hi-Boss uses a hybrid execution policy per run. It resolves one of two modes:
 
-- Codex: always passes `--dangerously-bypass-approvals-and-sandbox` (fresh + resume).
-- Claude: always passes `--permission-mode bypassPermissions`.
+- `full-access`
+- `workspace-sandbox`
+
+Resolution rules (in order):
+
+1. If any pending envelope for the run is from a non-boss channel sender (`from: channel:*` and `fromBoss=false`), force `workspace-sandbox`.
+2. Otherwise, if any pending envelope is from a boss channel sender (`from: channel:*` and `fromBoss=true`) and agent `permissionLevel` is not `restricted`, use `full-access`.
+3. Otherwise, if the current turn text is classified as **read/search-only** and agent `permissionLevel` is not `restricted`, use `full-access`.
+4. Otherwise, use `workspace-sandbox`.
+
+Background one-shot policy (`to: agent:background`):
+
+- Read/search-only prompt + non-`restricted` sender permission -> `full-access`
+- Otherwise -> `workspace-sandbox`
+
+Read/search-only classification is heuristic text intent detection. If mutating intent is detected (edit/delete/create/run/build/test/etc.), Hi-Boss stays in `workspace-sandbox`.
+
+Separately, inbound channel routing has a destructive confirmation gate for boss-origin delete/clear/reset intents. Unconfirmed requests are not routed to agents and instead receive a confirmation prompt.
+
+Provider-specific runtime flags by mode:
+
+- Codex:
+  - `full-access`: `--dangerously-bypass-approvals-and-sandbox`
+  - `workspace-sandbox`: `--ask-for-approval never --sandbox workspace-write`
+- Claude:
+  - `full-access`: `--permission-mode bypassPermissions`
+  - `workspace-sandbox`: `--permission-mode default`
 
 ## Invocation (canonical)
 
 Claude (per turn):
-- `claude -p --append-system-prompt ... --output-format stream-json --verbose --permission-mode bypassPermissions`
+- `claude -p --append-system-prompt ... --output-format stream-json --verbose --permission-mode <bypassPermissions|default>`
 - Adds `--add-dir` for:
   - `{{HIBOSS_DIR}}/agents/<agent>/internal_space`
+  - `{{HIBOSS_DIR}}/.daemon`
 - Adds `--model <model>` when configured.
 - Adds `-r <session-id>` when resuming.
 
 Codex (per turn):
-- Fresh: `codex exec --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --add-dir ... -c developer_instructions=... [-c model_reasoning_effort="..."] [-m <model>] <prompt>`
-- Resume: `codex exec resume --json --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox [-c ...] [-m <model>] <thread-id> <prompt>`
+- Fresh: `codex [--dangerously-bypass-approvals-and-sandbox | --ask-for-approval never --sandbox workspace-write] exec --json --skip-git-repo-check --add-dir {{HIBOSS_DIR}}/agents/<agent>/internal_space --add-dir {{HIBOSS_DIR}}/.daemon -c developer_instructions=... [-c model_reasoning_effort="..."] [-m <model>] <prompt>`
+- Resume: `codex [--dangerously-bypass-approvals-and-sandbox | --ask-for-approval never --sandbox workspace-write] exec resume --json --skip-git-repo-check [-c ...] [-m <model>] <thread-id> <prompt>`
   - Note: `codex exec resume` does not support `--add-dir`.
 
 Background one-shot (`to: agent:background`):
-- Claude: `claude -p --output-format text --permission-mode bypassPermissions [-m <model>]`
-- Codex: `codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -o <tmp-file> [-c model_reasoning_effort="..."] [-m <model>] <prompt>`
+- Claude: `claude -p --output-format text --permission-mode <bypassPermissions|default> [-m <model>]`
+- Codex: `codex [--dangerously-bypass-approvals-and-sandbox | --ask-for-approval never --sandbox workspace-write] exec --skip-git-repo-check -o <tmp-file> [-c model_reasoning_effort="..."] [-m <model>] <prompt>`
 - Final feedback text is taken from provider-native stable outputs (Claude text stdout, Codex `-o` file), not JSONL event parsing.
 
 ## Abort / cancellation behavior

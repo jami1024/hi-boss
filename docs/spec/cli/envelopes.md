@@ -16,6 +16,9 @@ Flags:
 - `--text <text>` or `--text -` (stdin) or `--text-file <path>`
 - `--attachment <path>` (repeatable)
 - `--reply-to <envelope-id>` (optional; adds thread context for agent↔agent envelopes; for channel destinations, also replies/quotes the referenced channel envelope when possible)
+- `--work-item-id <id>` (optional; requirement context key for orchestration)
+- `--work-item-state <state>` (optional; `new|triaged|in-progress|awaiting-user|blocked|done|archived`; requires `--work-item-id`)
+- `--work-item-title <title>` (optional; requires `--work-item-id`)
 - `--parse-mode <mode>` (optional; channel destinations only; `plain|markdownv2|html`)
 - `--deliver-at <time>` (ISO 8601 or relative: `+2h`, `+30m`, `+1Y2M`, `-15m`; units: `Y/M/D/h/m/s`)
 
@@ -23,6 +26,17 @@ Notes:
 - Sender identity is derived from the authenticated **agent token**.
 - Boss tokens cannot send envelopes via `hiboss envelope send`; to message an agent as a human/boss, send via a channel adapter (e.g., Telegram).
 - Sending to `agent:<name>` fails fast if the agent does not exist (`NOT_FOUND`) or the address is invalid (`INVALID_PARAMS`).
+- When `--work-item-id` is present, the daemon upserts a persistent work item record (`work_items`) and mirrors optional `--work-item-state` / `--work-item-title` into that record.
+- When `--work-item-state` is present and the work item already exists, transition must satisfy lifecycle guard rules.
+- `--work-item-state done` requires sender role `leader`.
+- For channel destinations with `--work-item-id`, Hi-Boss enforces a per-work-item channel allowlist:
+  - first channel destination seeds the allowlist;
+  - later sends to a new channel require `leader` role to expand the allowlist;
+  - non-leader sends to non-allowlisted channels are rejected.
+- Allowlist can be managed explicitly via `hiboss work-item update --add-channel/--remove-channel`.
+- After explicit allowlist management, the work item enters strict allowlist mode:
+  - non-leader sends can no longer auto-seed/expand channels;
+  - removing all channels does not reopen auto-seeding for non-leader sends.
 
 Output (parseable):
 

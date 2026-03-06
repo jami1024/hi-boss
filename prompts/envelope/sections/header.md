@@ -11,3 +11,12 @@ deliver-at: {{ envelope.deliverAt.iso }}
 {% if envelope.cronId %}
 cron-id: {{ envelope.cronId }}
 {% endif %}
+{% if envelope.workItem.present %}
+work-item-id: {{ envelope.workItem.id }}
+{% if envelope.workItem.state %}
+work-item-state: {{ envelope.workItem.state }}
+{% endif %}
+{% if envelope.workItem.title %}
+work-item-title: {{ envelope.workItem.title }}
+{% endif %}
+{% endif %}
