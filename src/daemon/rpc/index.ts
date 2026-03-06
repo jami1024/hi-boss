@@ -13,3 +13,5 @@ export { createSetupHandlers } from "./setup-handlers.js";
 export { createAgentHandlers } from "./agent-handlers.js";
 export { createAgentSetHandler } from "./agent-set-handler.js";
 export { createAgentDeleteHandler } from "./agent-delete-handler.js";
+export { createWorkItemHandlers } from "./work-item-handlers.js";
+export { createProjectHandlers } from "./project-handlers.js";

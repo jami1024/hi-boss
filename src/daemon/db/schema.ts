@@ -91,6 +91,79 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   error TEXT
 );
 
+CREATE TABLE IF NOT EXISTS work_items (
+  id TEXT PRIMARY KEY,
+  state TEXT NOT NULL,
+  title TEXT,
+  project_id TEXT,
+  project_root TEXT,
+  orchestrator_agent TEXT,
+  main_group_channel TEXT,
+  requirement_group_channel TEXT,
+  created_at INTEGER DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000),
+  updated_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS work_item_channel_allowlist (
+  work_item_id TEXT NOT NULL,
+  channel_address TEXT NOT NULL,
+  created_by_agent TEXT,
+  created_at INTEGER DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000),
+  PRIMARY KEY (work_item_id, channel_address),
+  FOREIGN KEY (work_item_id) REFERENCES work_items(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS work_item_channel_policies (
+  work_item_id TEXT PRIMARY KEY,
+  strict_allowlist INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER,
+  FOREIGN KEY (work_item_id) REFERENCES work_items(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS work_item_specialists (
+  work_item_id TEXT NOT NULL,
+  agent_name TEXT NOT NULL,
+  capability TEXT,
+  assigned_by TEXT,
+  assigned_at INTEGER NOT NULL,
+  PRIMARY KEY (work_item_id, agent_name),
+  FOREIGN KEY (work_item_id) REFERENCES work_items(id) ON DELETE CASCADE,
+  FOREIGN KEY (agent_name) REFERENCES agents(name) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS work_item_transitions (
+  id TEXT PRIMARY KEY,
+  work_item_id TEXT NOT NULL,
+  from_state TEXT,
+  to_state TEXT NOT NULL,
+  actor TEXT,
+  reason TEXT,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (work_item_id) REFERENCES work_items(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  root TEXT NOT NULL,
+  speaker_agent TEXT NOT NULL,
+  main_group_channel TEXT,
+  created_at INTEGER DEFAULT (CAST(strftime('%s','now') AS INTEGER) * 1000),
+  updated_at INTEGER,
+  UNIQUE(root)
+);
+
+CREATE TABLE IF NOT EXISTS project_leaders (
+  project_id TEXT NOT NULL,
+  agent_name TEXT NOT NULL,
+  capabilities_json TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (project_id, agent_name),
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  FOREIGN KEY (agent_name) REFERENCES agents(name) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_envelopes_to ON envelopes("to", status);
 CREATE INDEX IF NOT EXISTS idx_envelopes_from ON envelopes("from", created_at);
 CREATE INDEX IF NOT EXISTS idx_envelopes_status_deliver_at ON envelopes(status, deliver_at);
@@ -101,4 +174,15 @@ CREATE INDEX IF NOT EXISTS idx_agent_bindings_agent ON agent_bindings(agent_name
 CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_bindings_agent_adapter_unique ON agent_bindings(agent_name, adapter_type);
 CREATE INDEX IF NOT EXISTS idx_agent_bindings_adapter ON agent_bindings(adapter_type, adapter_token);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_agent ON agent_runs(agent_name, started_at);
+CREATE INDEX IF NOT EXISTS idx_work_items_state_updated_at ON work_items(state, updated_at);
+CREATE INDEX IF NOT EXISTS idx_work_items_project_id ON work_items(project_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_work_item_channel_allowlist_item ON work_item_channel_allowlist(work_item_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_work_item_channel_policies_strict ON work_item_channel_policies(strict_allowlist, updated_at);
+CREATE INDEX IF NOT EXISTS idx_work_item_specialists_item_agent ON work_item_specialists(work_item_id, agent_name);
+CREATE INDEX IF NOT EXISTS idx_work_item_specialists_agent ON work_item_specialists(agent_name, assigned_at);
+CREATE INDEX IF NOT EXISTS idx_work_item_transitions_item_created ON work_item_transitions(work_item_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_projects_root ON projects(root);
+CREATE INDEX IF NOT EXISTS idx_projects_speaker ON projects(speaker_agent, updated_at);
+CREATE INDEX IF NOT EXISTS idx_project_leaders_project_active ON project_leaders(project_id, active, updated_at);
+CREATE INDEX IF NOT EXISTS idx_project_leaders_agent ON project_leaders(agent_name, updated_at);
 `;

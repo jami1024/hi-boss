@@ -91,6 +91,14 @@ export const DEFAULT_PERMISSION_POLICY: PermissionPolicyV1 = {
     "cron.disable": "restricted",
     "cron.delete": "restricted",
 
+    "work-item.list": "restricted",
+    "work-item.get": "restricted",
+    "work-item.update": "restricted",
+
+    "project.list": "restricted",
+    "project.get": "restricted",
+    "project.select-leader": "restricted",
+
     // Daemon read-only
     "daemon.status": "boss",
     "daemon.ping": "standard",

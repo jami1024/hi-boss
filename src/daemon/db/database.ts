@@ -22,6 +22,13 @@ import { generateToken, hashToken, verifyToken } from "../../agent/auth.js";
 import { generateUUID } from "../../shared/uuid.js";
 import { assertValidAgentName } from "../../shared/validation.js";
 import { getDaemonIanaTimeZone } from "../../shared/timezone.js";
+import type { Project, ProjectLeader } from "../../shared/project.js";
+import type {
+  WorkItem,
+  WorkItemSpecialistAssignment,
+  WorkItemState,
+  WorkItemTransition,
+} from "../../shared/work-item.js";
 
 /**
  * Database row types for SQLite mapping.
@@ -91,6 +98,55 @@ interface AgentRunRow {
   error: string | null;
 }
 
+interface WorkItemRow {
+  id: string;
+  state: string;
+  title: string | null;
+  project_id: string | null;
+  project_root: string | null;
+  orchestrator_agent: string | null;
+  main_group_channel: string | null;
+  requirement_group_channel: string | null;
+  created_at: number;
+  updated_at: number | null;
+}
+
+interface WorkItemSpecialistRow {
+  work_item_id: string;
+  agent_name: string;
+  capability: string | null;
+  assigned_by: string | null;
+  assigned_at: number;
+}
+
+interface WorkItemTransitionRow {
+  id: string;
+  work_item_id: string;
+  from_state: string | null;
+  to_state: string;
+  actor: string | null;
+  reason: string | null;
+  created_at: number;
+}
+
+interface ProjectRow {
+  id: string;
+  name: string;
+  root: string;
+  speaker_agent: string;
+  main_group_channel: string | null;
+  created_at: number;
+  updated_at: number | null;
+}
+
+interface ProjectLeaderRow {
+  project_id: string;
+  agent_name: string;
+  capabilities_json: string | null;
+  active: number;
+  updated_at: number;
+}
+
 /**
  * Agent binding type.
  */
@@ -136,8 +192,27 @@ export class HiBossDatabase {
 
   private initSchema(): void {
     this.db.exec(SCHEMA_SQL);
+    this.migrateWorkItemSchema();
     this.assertSchemaCompatible();
     this.reconcileStaleAgentRunsOnStartup();
+  }
+
+  private migrateWorkItemSchema(): void {
+    const info = this.db.prepare("PRAGMA table_info(work_items)").all() as Array<{ name: string }>;
+    if (info.length === 0) return;
+
+    const existing = new Set(info.map((c) => c.name));
+    const maybeAddColumn = (column: string, type: "TEXT" | "INTEGER"): void => {
+      if (existing.has(column)) return;
+      this.db.exec(`ALTER TABLE work_items ADD COLUMN ${column} ${type}`);
+      existing.add(column);
+    };
+
+    maybeAddColumn("project_id", "TEXT");
+    maybeAddColumn("project_root", "TEXT");
+    maybeAddColumn("orchestrator_agent", "TEXT");
+    maybeAddColumn("main_group_channel", "TEXT");
+    maybeAddColumn("requirement_group_channel", "TEXT");
   }
 
   private assertSchemaCompatible(): void {
@@ -195,6 +270,61 @@ export class HiBossDatabase {
         "status",
         "error",
       ],
+      work_items: [
+        "id",
+        "state",
+        "title",
+        "project_id",
+        "project_root",
+        "orchestrator_agent",
+        "main_group_channel",
+        "requirement_group_channel",
+        "created_at",
+        "updated_at",
+      ],
+      work_item_channel_allowlist: [
+        "work_item_id",
+        "channel_address",
+        "created_by_agent",
+        "created_at",
+      ],
+      work_item_channel_policies: [
+        "work_item_id",
+        "strict_allowlist",
+        "updated_at",
+      ],
+      work_item_specialists: [
+        "work_item_id",
+        "agent_name",
+        "capability",
+        "assigned_by",
+        "assigned_at",
+      ],
+      work_item_transitions: [
+        "id",
+        "work_item_id",
+        "from_state",
+        "to_state",
+        "actor",
+        "reason",
+        "created_at",
+      ],
+      projects: [
+        "id",
+        "name",
+        "root",
+        "speaker_agent",
+        "main_group_channel",
+        "created_at",
+        "updated_at",
+      ],
+      project_leaders: [
+        "project_id",
+        "agent_name",
+        "capabilities_json",
+        "active",
+        "updated_at",
+      ],
     };
 
     const expectedIntegerColumns: Array<{ table: string; column: string }> = [
@@ -208,6 +338,17 @@ export class HiBossDatabase {
       { table: "cron_schedules", column: "updated_at" },
       { table: "agent_runs", column: "started_at" },
       { table: "agent_runs", column: "completed_at" },
+      { table: "work_items", column: "created_at" },
+      { table: "work_items", column: "updated_at" },
+      { table: "work_item_channel_allowlist", column: "created_at" },
+      { table: "work_item_channel_policies", column: "strict_allowlist" },
+      { table: "work_item_channel_policies", column: "updated_at" },
+      { table: "work_item_specialists", column: "assigned_at" },
+      { table: "work_item_transitions", column: "created_at" },
+      { table: "projects", column: "created_at" },
+      { table: "projects", column: "updated_at" },
+      { table: "project_leaders", column: "active" },
+      { table: "project_leaders", column: "updated_at" },
     ];
 
     for (const [table, requiredColumns] of Object.entries(requiredColumnsByTable)) {
@@ -1357,6 +1498,63 @@ export class HiBossDatabase {
     return rows.map((r) => r.to_address);
   }
 
+  listChannelAddressesForWorkItem(workItemId: string): string[] {
+    const stmt = this.db.prepare(`
+      SELECT channel_address
+      FROM work_item_channel_allowlist
+      WHERE work_item_id = ?
+      ORDER BY created_at ASC, channel_address ASC
+    `);
+
+    const rows = stmt.all(workItemId) as Array<{ channel_address: string }>;
+    return rows.map((row) => row.channel_address);
+  }
+
+  addChannelAddressToWorkItemAllowlist(input: {
+    workItemId: string;
+    channelAddress: string;
+    createdByAgent?: string;
+  }): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO work_item_channel_allowlist (work_item_id, channel_address, created_by_agent, created_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(work_item_id, channel_address) DO NOTHING
+    `);
+
+    stmt.run(
+      input.workItemId,
+      input.channelAddress,
+      input.createdByAgent ?? null,
+      Date.now()
+    );
+  }
+
+  removeChannelAddressFromWorkItemAllowlist(workItemId: string, channelAddress: string): boolean {
+    const stmt = this.db.prepare(
+      "DELETE FROM work_item_channel_allowlist WHERE work_item_id = ? AND channel_address = ?"
+    );
+    const result = stmt.run(workItemId, channelAddress);
+    return result.changes > 0;
+  }
+
+  isWorkItemChannelAllowlistStrict(workItemId: string): boolean {
+    const stmt = this.db.prepare(
+      "SELECT strict_allowlist FROM work_item_channel_policies WHERE work_item_id = ? LIMIT 1"
+    );
+    const row = stmt.get(workItemId) as { strict_allowlist: number } | undefined;
+    return (row?.strict_allowlist ?? 0) === 1;
+  }
+
+  setWorkItemChannelAllowlistStrict(workItemId: string, strict: boolean): void {
+    const now = Date.now();
+    const stmt = this.db.prepare(`
+      INSERT INTO work_item_channel_policies (work_item_id, strict_allowlist, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(work_item_id) DO UPDATE SET strict_allowlist = excluded.strict_allowlist, updated_at = excluded.updated_at
+    `);
+    stmt.run(workItemId, strict ? 1 : 0, now);
+  }
+
   /**
    * List pending envelopes that are due for delivery to channels.
    *
@@ -1461,6 +1659,533 @@ export class HiBossDatabase {
       contextLength: typeof row.context_length === "number" ? row.context_length : undefined,
       status: row.status as "running" | "completed" | "failed" | "cancelled",
       error: row.error ?? undefined,
+    };
+  }
+
+  listWorkItemSpecialistAssignments(workItemId: string): WorkItemSpecialistAssignment[] {
+    const stmt = this.db.prepare(`
+      SELECT work_item_id, agent_name, capability, assigned_by, assigned_at
+      FROM work_item_specialists
+      WHERE work_item_id = ?
+      ORDER BY assigned_at ASC, agent_name ASC
+    `);
+    const rows = stmt.all(workItemId) as WorkItemSpecialistRow[];
+    return rows.map((row) => this.rowToWorkItemSpecialistAssignment(row));
+  }
+
+  listWorkItemSpecialists(workItemId: string): string[] {
+    return this.listWorkItemSpecialistAssignments(workItemId).map((row) => row.agentName);
+  }
+
+  isWorkItemSpecialistAssigned(workItemId: string, agentName: string): boolean {
+    const stmt = this.db.prepare(
+      "SELECT 1 AS ok FROM work_item_specialists WHERE work_item_id = ? AND agent_name = ? LIMIT 1"
+    );
+    const row = stmt.get(workItemId, agentName) as { ok: number } | undefined;
+    return Boolean(row?.ok);
+  }
+
+  upsertWorkItemSpecialistAssignment(input: {
+    workItemId: string;
+    agentName: string;
+    capability?: string;
+    assignedBy?: string;
+    assignedAt?: number;
+  }): WorkItemSpecialistAssignment {
+    const assignedAt = input.assignedAt ?? Date.now();
+    const stmt = this.db.prepare(`
+      INSERT INTO work_item_specialists (work_item_id, agent_name, capability, assigned_by, assigned_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(work_item_id, agent_name) DO UPDATE SET
+        capability = CASE
+          WHEN excluded.capability IS NOT NULL THEN excluded.capability
+          ELSE work_item_specialists.capability
+        END,
+        assigned_by = excluded.assigned_by,
+        assigned_at = excluded.assigned_at
+    `);
+    stmt.run(
+      input.workItemId,
+      input.agentName,
+      input.capability ?? null,
+      input.assignedBy ?? null,
+      assignedAt
+    );
+
+    const readStmt = this.db.prepare(`
+      SELECT work_item_id, agent_name, capability, assigned_by, assigned_at
+      FROM work_item_specialists
+      WHERE work_item_id = ? AND agent_name = ?
+      LIMIT 1
+    `);
+    const row = readStmt.get(input.workItemId, input.agentName) as WorkItemSpecialistRow | undefined;
+    if (!row) {
+      throw new Error("Failed to persist work item specialist assignment");
+    }
+    return this.rowToWorkItemSpecialistAssignment(row);
+  }
+
+  recordWorkItemTransition(input: {
+    workItemId: string;
+    fromState?: WorkItemState;
+    toState: WorkItemState;
+    actor?: string;
+    reason?: string;
+    createdAt?: number;
+    id?: string;
+  }): WorkItemTransition {
+    const id = input.id ?? generateUUID();
+    const createdAt = input.createdAt ?? Date.now();
+
+    const stmt = this.db.prepare(`
+      INSERT INTO work_item_transitions (id, work_item_id, from_state, to_state, actor, reason, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      id,
+      input.workItemId,
+      input.fromState ?? null,
+      input.toState,
+      input.actor ?? null,
+      input.reason ?? null,
+      createdAt
+    );
+
+    return {
+      id,
+      workItemId: input.workItemId,
+      fromState: input.fromState,
+      toState: input.toState,
+      actor: input.actor,
+      reason: input.reason,
+      createdAt,
+    };
+  }
+
+  listWorkItemTransitions(workItemId: string, limit = 50): WorkItemTransition[] {
+    const stmt = this.db.prepare(`
+      SELECT id, work_item_id, from_state, to_state, actor, reason, created_at
+      FROM work_item_transitions
+      WHERE work_item_id = ?
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(workItemId, Math.max(1, Math.trunc(limit))) as WorkItemTransitionRow[];
+    return rows.map((row) => this.rowToWorkItemTransition(row));
+  }
+
+  getWorkItemById(id: string): WorkItem | null {
+    const stmt = this.db.prepare("SELECT * FROM work_items WHERE id = ?");
+    const row = stmt.get(id) as WorkItemRow | undefined;
+    if (!row) return null;
+    const item = this.rowToWorkItem(row);
+    item.specialists = this.listWorkItemSpecialists(id);
+    return item;
+  }
+
+  listWorkItems(options?: { state?: WorkItemState; limit?: number }): WorkItem[] {
+    const state = options?.state;
+    const limit = options?.limit;
+
+    let sql = "SELECT * FROM work_items";
+    const params: Array<string | number> = [];
+    if (state) {
+      sql += " WHERE state = ?";
+      params.push(state);
+    }
+
+    sql += " ORDER BY COALESCE(updated_at, created_at) DESC, id ASC";
+
+    if (typeof limit === "number" && Number.isFinite(limit)) {
+      sql += " LIMIT ?";
+      params.push(Math.max(1, Math.trunc(limit)));
+    }
+
+    const stmt = this.db.prepare(sql);
+    const rows = stmt.all(...params) as WorkItemRow[];
+    return rows.map((row) => {
+      const item = this.rowToWorkItem(row);
+      item.specialists = this.listWorkItemSpecialists(item.id);
+      return item;
+    });
+  }
+
+  upsertWorkItem(input: {
+    id: string;
+    state?: WorkItemState;
+    title?: string;
+    projectId?: string;
+    projectRoot?: string;
+    orchestratorAgent?: string;
+    mainGroupChannel?: string;
+    requirementGroupChannel?: string;
+    actor?: string;
+    reason?: string;
+  }): WorkItem {
+    const existing = this.getWorkItemById(input.id);
+    const now = Date.now();
+
+    if (!existing) {
+      const initialState = input.state ?? "new";
+      const stmt = this.db.prepare(
+        "INSERT INTO work_items (id, state, title, project_id, project_root, orchestrator_agent, main_group_channel, requirement_group_channel, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      );
+      stmt.run(
+        input.id,
+        initialState,
+        input.title ?? null,
+        input.projectId ?? null,
+        input.projectRoot ?? null,
+        input.orchestratorAgent ?? null,
+        input.mainGroupChannel ?? null,
+        input.requirementGroupChannel ?? null,
+        now,
+        now
+      );
+      this.recordWorkItemTransition({
+        workItemId: input.id,
+        toState: initialState,
+        actor: input.actor,
+        reason: input.reason ?? "work-item-created",
+        createdAt: now,
+      });
+      return this.getWorkItemById(input.id)!;
+    }
+
+    const nextState = input.state ?? existing.state;
+    const nextTitle = input.title ?? existing.title ?? null;
+    const nextProjectId = input.projectId ?? existing.projectId ?? null;
+    const nextProjectRoot = input.projectRoot ?? existing.projectRoot ?? null;
+    const nextOrchestratorAgent = input.orchestratorAgent ?? existing.orchestratorAgent ?? null;
+    const nextMainGroupChannel = input.mainGroupChannel ?? existing.mainGroupChannel ?? null;
+    const nextRequirementGroupChannel =
+      input.requirementGroupChannel ?? existing.requirementGroupChannel ?? null;
+
+    if (
+      nextState === existing.state &&
+      nextTitle === (existing.title ?? null) &&
+      nextProjectId === (existing.projectId ?? null) &&
+      nextProjectRoot === (existing.projectRoot ?? null) &&
+      nextOrchestratorAgent === (existing.orchestratorAgent ?? null) &&
+      nextMainGroupChannel === (existing.mainGroupChannel ?? null) &&
+      nextRequirementGroupChannel === (existing.requirementGroupChannel ?? null)
+    ) {
+      return existing;
+    }
+
+    const stmt = this.db.prepare(
+      "UPDATE work_items SET state = ?, title = ?, project_id = ?, project_root = ?, orchestrator_agent = ?, main_group_channel = ?, requirement_group_channel = ?, updated_at = ? WHERE id = ?"
+    );
+    stmt.run(
+      nextState,
+      nextTitle,
+      nextProjectId,
+      nextProjectRoot,
+      nextOrchestratorAgent,
+      nextMainGroupChannel,
+      nextRequirementGroupChannel,
+      now,
+      input.id
+    );
+
+    if (nextState !== existing.state) {
+      this.recordWorkItemTransition({
+        workItemId: input.id,
+        fromState: existing.state,
+        toState: nextState,
+        actor: input.actor,
+        reason: input.reason ?? "work-item-state-upsert",
+        createdAt: now,
+      });
+    }
+
+    return this.getWorkItemById(input.id)!;
+  }
+
+  updateWorkItem(input: {
+    id: string;
+    state?: WorkItemState;
+    title?: string | null;
+    projectId?: string;
+    projectRoot?: string;
+    orchestratorAgent?: string;
+    mainGroupChannel?: string;
+    requirementGroupChannel?: string;
+    actor?: string;
+    reason?: string;
+  }): WorkItem {
+    const existing = this.getWorkItemById(input.id);
+    if (!existing) {
+      throw new Error("Work item not found");
+    }
+
+    const updates: string[] = [];
+    const params: Array<string | number | null> = [];
+
+    if (input.state !== undefined) {
+      updates.push("state = ?");
+      params.push(input.state);
+    }
+
+    if (input.title !== undefined) {
+      updates.push("title = ?");
+      params.push(input.title);
+    }
+
+    if (input.projectId !== undefined) {
+      updates.push("project_id = ?");
+      params.push(input.projectId);
+    }
+
+    if (input.projectRoot !== undefined) {
+      updates.push("project_root = ?");
+      params.push(input.projectRoot);
+    }
+
+    if (input.orchestratorAgent !== undefined) {
+      updates.push("orchestrator_agent = ?");
+      params.push(input.orchestratorAgent);
+    }
+
+    if (input.mainGroupChannel !== undefined) {
+      updates.push("main_group_channel = ?");
+      params.push(input.mainGroupChannel);
+    }
+
+    if (input.requirementGroupChannel !== undefined) {
+      updates.push("requirement_group_channel = ?");
+      params.push(input.requirementGroupChannel);
+    }
+
+    if (updates.length === 0) {
+      return existing;
+    }
+
+    updates.push("updated_at = ?");
+    params.push(Date.now());
+
+    const stmt = this.db.prepare(`UPDATE work_items SET ${updates.join(", ")} WHERE id = ?`);
+    stmt.run(...params, input.id);
+
+    if (input.state !== undefined && input.state !== existing.state) {
+      this.recordWorkItemTransition({
+        workItemId: input.id,
+        fromState: existing.state,
+        toState: input.state,
+        actor: input.actor,
+        reason: input.reason ?? "work-item-state-update",
+      });
+    }
+
+    return this.getWorkItemById(input.id)!;
+  }
+
+  private rowToWorkItem(row: WorkItemRow): WorkItem {
+    return {
+      id: row.id,
+      state: row.state as WorkItemState,
+      title: row.title ?? undefined,
+      projectId: row.project_id ?? undefined,
+      projectRoot: row.project_root ?? undefined,
+      orchestratorAgent: row.orchestrator_agent ?? undefined,
+      mainGroupChannel: row.main_group_channel ?? undefined,
+      requirementGroupChannel: row.requirement_group_channel ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at ?? undefined,
+    };
+  }
+
+  private rowToWorkItemSpecialistAssignment(row: WorkItemSpecialistRow): WorkItemSpecialistAssignment {
+    return {
+      workItemId: row.work_item_id,
+      agentName: row.agent_name,
+      capability: row.capability ?? undefined,
+      assignedBy: row.assigned_by ?? undefined,
+      assignedAt: row.assigned_at,
+    };
+  }
+
+  private rowToWorkItemTransition(row: WorkItemTransitionRow): WorkItemTransition {
+    return {
+      id: row.id,
+      workItemId: row.work_item_id,
+      fromState: row.from_state ? (row.from_state as WorkItemState) : undefined,
+      toState: row.to_state as WorkItemState,
+      actor: row.actor ?? undefined,
+      reason: row.reason ?? undefined,
+      createdAt: row.created_at,
+    };
+  }
+
+  getProjectById(id: string): Project | null {
+    const stmt = this.db.prepare("SELECT * FROM projects WHERE id = ? LIMIT 1");
+    const row = stmt.get(id) as ProjectRow | undefined;
+    if (!row) return null;
+    const project = this.rowToProject(row);
+    project.leaders = this.listProjectLeaders(project.id, { activeOnly: false });
+    return project;
+  }
+
+  getProjectByRoot(root: string): Project | null {
+    const stmt = this.db.prepare("SELECT * FROM projects WHERE root = ? LIMIT 1");
+    const row = stmt.get(root) as ProjectRow | undefined;
+    if (!row) return null;
+    const project = this.rowToProject(row);
+    project.leaders = this.listProjectLeaders(project.id, { activeOnly: false });
+    return project;
+  }
+
+  listProjects(options?: { limit?: number }): Project[] {
+    const limit =
+      typeof options?.limit === "number" && Number.isFinite(options.limit)
+        ? Math.max(1, Math.trunc(options.limit))
+        : 50;
+
+    const stmt = this.db.prepare(`
+      SELECT *
+      FROM projects
+      ORDER BY COALESCE(updated_at, created_at) DESC, id ASC
+      LIMIT ?
+    `);
+    const rows = stmt.all(limit) as ProjectRow[];
+    return rows.map((row) => {
+      const project = this.rowToProject(row);
+      project.leaders = this.listProjectLeaders(project.id, { activeOnly: false });
+      return project;
+    });
+  }
+
+  upsertProject(input: {
+    id: string;
+    name: string;
+    root: string;
+    speakerAgent: string;
+    mainGroupChannel?: string;
+  }): Project {
+    const now = Date.now();
+    const stmt = this.db.prepare(`
+      INSERT INTO projects (id, name, root, speaker_agent, main_group_channel, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        root = excluded.root,
+        speaker_agent = excluded.speaker_agent,
+        main_group_channel = excluded.main_group_channel,
+        updated_at = excluded.updated_at
+    `);
+    stmt.run(
+      input.id,
+      input.name,
+      input.root,
+      input.speakerAgent,
+      input.mainGroupChannel ?? null,
+      now,
+      now
+    );
+
+    const project = this.getProjectById(input.id);
+    if (!project) {
+      throw new Error("Failed to persist project");
+    }
+    return project;
+  }
+
+  upsertProjectLeader(input: {
+    projectId: string;
+    agentName: string;
+    capabilities?: string[];
+    active?: boolean;
+  }): ProjectLeader {
+    const now = Date.now();
+    const normalizedCaps =
+      (input.capabilities ?? [])
+        .map((c) => c.trim())
+        .filter((c) => c.length > 0)
+        .map((c) => c.toLowerCase())
+        .filter((value, index, all) => all.indexOf(value) === index)
+        .sort((a, b) => a.localeCompare(b)) ?? [];
+
+    const stmt = this.db.prepare(`
+      INSERT INTO project_leaders (project_id, agent_name, capabilities_json, active, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, agent_name) DO UPDATE SET
+        capabilities_json = CASE
+          WHEN excluded.capabilities_json IS NOT NULL THEN excluded.capabilities_json
+          ELSE project_leaders.capabilities_json
+        END,
+        active = excluded.active,
+        updated_at = excluded.updated_at
+    `);
+    stmt.run(
+      input.projectId,
+      input.agentName,
+      normalizedCaps.length > 0 ? JSON.stringify(normalizedCaps) : null,
+      input.active === false ? 0 : 1,
+      now
+    );
+
+    const rowStmt = this.db.prepare(`
+      SELECT project_id, agent_name, capabilities_json, active, updated_at
+      FROM project_leaders
+      WHERE project_id = ? AND agent_name = ?
+      LIMIT 1
+    `);
+    const row = rowStmt.get(input.projectId, input.agentName) as ProjectLeaderRow | undefined;
+    if (!row) {
+      throw new Error("Failed to persist project leader");
+    }
+    return this.rowToProjectLeader(row);
+  }
+
+  listProjectLeaders(projectId: string, options?: { activeOnly?: boolean }): ProjectLeader[] {
+    const activeOnly = options?.activeOnly === true;
+    const stmt = this.db.prepare(`
+      SELECT project_id, agent_name, capabilities_json, active, updated_at
+      FROM project_leaders
+      WHERE project_id = ?
+        AND (? = 0 OR active = 1)
+      ORDER BY updated_at DESC, agent_name ASC
+    `);
+    const rows = stmt.all(projectId, activeOnly ? 1 : 0) as ProjectLeaderRow[];
+    return rows.map((row) => this.rowToProjectLeader(row));
+  }
+
+  private parseCapabilitiesJson(raw: string | null): string[] {
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+        .map((item) => item.toLowerCase())
+        .filter((value, index, all) => all.indexOf(value) === index)
+        .sort((a, b) => a.localeCompare(b));
+    } catch {
+      return [];
+    }
+  }
+
+  private rowToProject(row: ProjectRow): Project {
+    return {
+      id: row.id,
+      name: row.name,
+      root: row.root,
+      speakerAgent: row.speaker_agent,
+      mainGroupChannel: row.main_group_channel ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at ?? undefined,
+    };
+  }
+
+  private rowToProjectLeader(row: ProjectLeaderRow): ProjectLeader {
+    return {
+      projectId: row.project_id,
+      agentName: row.agent_name,
+      capabilities: this.parseCapabilitiesJson(row.capabilities_json),
+      active: row.active === 1,
+      updatedAt: row.updated_at,
     };
   }
 

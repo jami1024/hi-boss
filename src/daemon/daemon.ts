@@ -16,6 +16,7 @@ import type { RpcMethodRegistry } from "./ipc/types.js";
 import { RPC_ERRORS } from "./ipc/types.js";
 import type { ChatAdapter } from "../adapters/types.js";
 import { TelegramAdapter } from "../adapters/telegram.adapter.js";
+import { FeishuAdapter } from "../adapters/feishu.adapter.js";
 import { BACKGROUND_AGENT_NAME, DEFAULT_AGENT_PERMISSION_LEVEL } from "../shared/defaults.js";
 import { getHiBossPaths } from "../shared/hiboss-paths.js";
 import {
@@ -40,6 +41,8 @@ import {
   createAgentHandlers,
   createAgentSetHandler,
   createAgentDeleteHandler,
+  createWorkItemHandlers,
+  createProjectHandlers,
 } from "./rpc/index.js";
 import { createChannelCommandHandler } from "./channel-commands.js";
 import { buildMissingAgentRolesGuidance } from "../shared/agent-role.js";
@@ -398,6 +401,9 @@ export class Daemon {
       case "telegram":
         adapter = new TelegramAdapter(adapterToken);
         break;
+      case "feishu":
+        adapter = new FeishuAdapter(adapterToken);
+        break;
       default:
         logEvent("error", "adapter-unknown-type", { "adapter-type": adapterType });
         return null;
@@ -474,6 +480,8 @@ export class Daemon {
       ...createAgentHandlers(ctx),
       ...createAgentSetHandler(ctx),
       ...createAgentDeleteHandler(ctx),
+      ...createWorkItemHandlers(ctx),
+      ...createProjectHandlers(ctx),
       ...createDaemonHandlers(ctx),
       ...createSetupHandlers(ctx),
     };
