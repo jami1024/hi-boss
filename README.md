@@ -2,13 +2,16 @@
 
 [中文说明](README.zh-CN.md)
 
-Orchestrate Codex / Claude Code agents from Telegram — with durable communication, editable memory, and non-blocking parallel execution.
+Orchestrate Codex / Claude Code agents from Telegram / Feishu — with durable communication, editable memory, and non-blocking parallel execution.
 
 Highlights:
+- Multi-adapter ingress: supports Telegram and Feishu channels.
 - Provider flexibility: supports both official provider workflows and relay fallback paths (官方直连 + 中转站方案).
+- Project-scoped orchestration: work-item context can bind project root + speaker + multiple leaders.
 - Built-in memory system: human-readable, directly editable Markdown memory for each agent.
 - Envelope system: durable agent↔agent and agent↔user communication with auditable message flow.
 - Non-blocking delegation: background/leader agents handle heavy tasks in parallel, while specialist agents can be registered for focused domains.
+- Declarative setup v2: `setup --config-file` supports full reconcile + startup auto-reconcile.
 
 ## Sponsor
 
@@ -87,15 +90,20 @@ hiboss setup --config-file ./hiboss.setup.json --token <boss-token>
 hiboss daemon start --token <boss-token>
 ```
 
-- Canonical repair for older single-agent Telegram setups (speaker only, missing leader). Save this as `./hiboss.repair.v2.json` and fill placeholders:
+- Canonical repair template (speaker + leader + optional project catalog). Save this as `./hiboss.repair.v2.json` and fill placeholders:
 
 ```json
 {
   "version": 2,
   "boss-name": "<your-name>",
   "boss-timezone": "<IANA-timezone>",
-  "telegram": {
-    "adapter-boss-id": "<telegram-username-without-@>"
+  "adapters": {
+    "telegram": {
+      "adapter-boss-id": "<telegram-username-without-@>"
+    },
+    "feishu": {
+      "adapter-boss-id": "<feishu-user-id>"
+    }
   },
   "agents": [
     {
@@ -125,6 +133,22 @@ hiboss daemon start --token <boss-token>
       "permission-level": "standard",
       "bindings": []
     }
+  ],
+  "projects": [
+    {
+      "id": "prj-<stable-id>",
+      "name": "<project-name>",
+      "root": "<absolute-project-root>",
+      "speaker-agent": "nex",
+      "main-group-channel": "channel:feishu:oc_xxx",
+      "leaders": [
+        {
+          "agent-name": "kai",
+          "capabilities": ["implementation", "review"],
+          "active": true
+        }
+      ]
+    }
   ]
 }
 ```
@@ -137,6 +161,17 @@ hiboss daemon start --token <boss-token>
 ```
 
 Note: setup config apply is a full reconcile and will regenerate agent tokens (printed once).
+After a successful apply, daemon startup stores config-file tracking metadata and can auto-reconcile on restart.
+
+Startup auto-reconcile examples:
+
+```bash
+# Uses persisted setup config path/fingerprint when available
+hiboss daemon start --token <boss-token>
+
+# Explicitly provide config file at startup (also updates persisted source)
+hiboss daemon start --token <boss-token> --config-file ./hiboss.repair.v2.json
+```
 
 Full reset (destructive):
 
@@ -167,6 +202,40 @@ Boss-only Telegram commands:
 - `/status` — show `hiboss agent status` for the bound agent
 - `/new` — request a session refresh for the bound agent
 - `/abort` — cancel current run and clear the bound agent's due pending inbox
+
+## Feishu
+
+Hi-Boss also supports Feishu as an adapter channel.
+
+Bind Feishu to a `speaker` agent:
+
+```bash
+hiboss agent set --token <boss-token> --name <speaker-agent-name> --role speaker --bind-adapter-type feishu --bind-adapter-token '<feishu-token>'
+```
+
+`<feishu-token>` supports:
+- short form: `<appId>:<appSecret>` (outgoing-only)
+- JSON form: includes webhook fields for inbound callbacks
+
+When using declarative setup, remember:
+- set `adapters.feishu.adapter-boss-id`
+- add Feishu binding in `agents[].bindings[]`
+
+## Project-Oriented Orchestration
+
+Hi-Boss persists project views in `projects` / `project_leaders` and supports project-level leader selection.
+
+Useful commands:
+
+```bash
+hiboss project list --token <agent-token>
+hiboss project get --id <project-id> --token <agent-token>
+hiboss project select-leader --project-id <project-id> --require-capability implementation --token <agent-token>
+```
+
+Notes:
+- Project leader candidates are filtered by workspace match (`agent.workspace` must equal `project.root`).
+- Leader selection ranking considers health, busy state, and agent name.
 
 ## Agent
 
@@ -235,3 +304,5 @@ Per-agent memory lives under `${HIBOSS_DIR:-$HOME/hiboss}/agents/<agent-name>/in
 - `docs/spec/index.md` — spec entrypoint + map
 - `docs/spec/cli.md` — CLI command surface and links
 - `docs/spec/adapters/telegram.md` — Telegram adapter behavior
+- `docs/spec/adapters/feishu.md` — Feishu adapter behavior
+- `docs/spec/cli/projects.md` — Project CLI (`list/get/select-leader`)
