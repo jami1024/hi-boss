@@ -52,6 +52,9 @@ export interface DaemonContext {
 
   // Agent handlers
   registerAgentHandler(agentName: string): void;
+
+  // RPC method registry (available after daemon initialization)
+  readonly rpcHandlers: RpcMethodRegistry;
 }
 
 /**

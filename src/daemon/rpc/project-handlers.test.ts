@@ -54,6 +54,7 @@ function buildAgentContext(db: HiBossDatabase, tempDir: string, busyNames: strin
     createAdapterForBinding: async () => null,
     removeAdapter: async () => undefined,
     registerAgentHandler: () => undefined,
+    rpcHandlers: {},
   };
 }
 

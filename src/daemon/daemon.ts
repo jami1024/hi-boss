@@ -28,6 +28,7 @@ import {
   parsePermissionPolicyV1OrDefault,
 } from "../shared/permissions.js";
 import { errorMessage, logEvent, setDaemonLogTimeZone } from "../shared/daemon-log.js";
+import { WebServer, DEFAULT_WEB_PORT, type WebServerConfig } from "../web/server.js";
 import { getEnvelopeSourceFromEnvelope } from "../envelope/source.js";
 import { PidLock, isDaemonRunning, isSocketAcceptingConnections } from "./pid-lock.js";
 import type { DaemonContext, Principal } from "./rpc/context.js";
@@ -74,6 +75,8 @@ export interface DaemonConfig {
   boss?: {
     telegram?: string;
   };
+  /** Web UI configuration. */
+  web?: WebServerConfig;
 }
 
 /**
@@ -111,6 +114,8 @@ export class Daemon {
   private startTimeMs: number | null = null;
   private pidLock: PidLock;
   private defaultPermissionPolicy: PermissionPolicyV1 = DEFAULT_PERMISSION_POLICY;
+  private webServer: WebServer | null = null;
+  private rpcMethods: RpcMethodRegistry = {};
 
   constructor(private config: DaemonConfig = getDefaultConfig()) {
     const dbPath = path.join(config.daemonDir, "hiboss.db");
@@ -192,6 +197,7 @@ export class Daemon {
       createAdapterForBinding: (type, token) => this.createAdapterForBinding(type, token),
       removeAdapter: (token) => this.removeAdapter(token),
       registerAgentHandler: (name) => this.registerSingleAgentHandler(name),
+      rpcHandlers: this.rpcMethods,
     };
   }
 
@@ -290,6 +296,11 @@ export class Daemon {
 
       // Process any pending envelopes from before restart
       await this.processPendingEnvelopes();
+
+      // Start web server (after everything else is ready)
+      const webConfig = this.config.web ?? { port: DEFAULT_WEB_PORT, enabled: true };
+      this.webServer = new WebServer(webConfig, this.createContext());
+      await this.webServer.start();
     } catch (err) {
       // Best-effort cleanup to avoid leaving stale pid/socket files.
       await this.stop().catch(() => {});
@@ -301,6 +312,7 @@ export class Daemon {
     logEvent("info", "daemon-started", {
       "data-dir": this.config.dataDir,
       "adapters-count": this.adapters.size,
+      ...(this.webServer?.isEnabled() ? { "web-port": this.webServer.getPort() } : {}),
     });
   }
 
@@ -439,6 +451,11 @@ export class Daemon {
     // Stop scheduler first (prevents new work while shutting down)
     this.scheduler.stop();
 
+    // Stop web server
+    if (this.webServer) {
+      await this.webServer.stop();
+    }
+
     // Stop all adapters
     for (const adapter of this.adapters.values()) {
       await adapter.stop();
@@ -487,5 +504,6 @@ export class Daemon {
     };
 
     this.ipc.registerMethods(methods);
+    this.rpcMethods = methods;
   }
 }

@@ -25,6 +25,8 @@ export interface StartDaemonOptions {
   token?: string;
   debug?: boolean;
   configFile?: string;
+  webPort?: number;
+  webEnabled?: boolean;
 }
 
 export interface StopDaemonOptions {
@@ -298,10 +300,20 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<voi
     if (options.debug) {
       args = [...args, "--debug"];
     }
+
+    const env: Record<string, string> = { ...process.env } as Record<string, string>;
+    if (options.webPort !== undefined) {
+      env.HIBOSS_WEB_PORT = String(options.webPort);
+    }
+    if (options.webEnabled === false) {
+      env.HIBOSS_WEB_ENABLED = "false";
+    }
+
     child = spawn(daemonScript, args, {
       detached: true,
       stdio: ["ignore", logFile, logFile],
       shell: daemonScript === "npx",
+      env,
     });
   } catch (error) {
     console.error("Failed to spawn daemon process:", error);

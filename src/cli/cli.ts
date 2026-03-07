@@ -73,11 +73,15 @@ daemon
     "Apply/reconcile setup config before start and record it for auto-load"
   )
   .option("--debug", "Include debug fields in daemon.log")
+  .option("--web-port <port>", "Web UI port (default: 7749)", parseInt)
+  .option("--no-web", "Disable the Web UI")
   .action((options) => {
     startDaemon({
       token: options.token,
       configFile: options.configFile,
       debug: Boolean(options.debug),
+      webPort: options.webPort,
+      webEnabled: options.web !== false,
     });
   });
 
