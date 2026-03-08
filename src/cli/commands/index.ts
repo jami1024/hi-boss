@@ -6,3 +6,4 @@ export * from "./agent.js";
 export * from "./setup.js";
 export * from "./work-item.js";
 export * from "./project.js";
+export * from "./skill.js";

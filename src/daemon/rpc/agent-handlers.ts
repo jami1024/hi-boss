@@ -33,6 +33,36 @@ import {
   predictRoleAfterBindingMutation,
   buildMutationInvariantViolationMessage,
 } from "../../shared/agent-role-mutation.js";
+import { resolveSessionRefreshTargetForAgent } from "../../agent/executor.js";
+
+const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{1,63}$/;
+
+function normalizeProjectId(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") {
+    rpcError(
+      RPC_ERRORS.INVALID_PARAMS,
+      "Invalid project-id (expected lowercase letters/numbers with optional . _ : -)"
+    );
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || !PROJECT_ID_PATTERN.test(normalized)) {
+    rpcError(
+      RPC_ERRORS.INVALID_PARAMS,
+      "Invalid project-id (expected lowercase letters/numbers with optional . _ : -)"
+    );
+  }
+
+  return normalized;
+}
+
+function parseProjectIdFromSessionTarget(agentName: string, sessionTarget: string): string | undefined {
+  const prefix = `${agentName}:`;
+  if (!sessionTarget.startsWith(prefix)) return undefined;
+  const projectId = sessionTarget.slice(prefix.length).trim();
+  return projectId.length > 0 ? projectId : undefined;
+}
 
 /**
  * Create agent RPC handlers (excluding agent.set which is in its own file).
@@ -118,6 +148,12 @@ export function createAgentHandlers(ctx: DaemonContext): RpcMethodRegistry {
 
       const currentRun = isBusy ? ctx.db.getCurrentRunningAgentRun(agent.name) : null;
       const lastRun = ctx.db.getLastFinishedAgentRun(agent.name);
+      const currentSessionTarget = currentRun
+        ? resolveSessionRefreshTargetForAgent({ db: ctx.db, agentName: agent.name })
+        : undefined;
+      const currentProjectId = currentSessionTarget
+        ? parseProjectIdFromSessionTarget(agent.name, currentSessionTarget)
+        : undefined;
 
       const result: AgentStatusResult = {
         agent: {
@@ -146,6 +182,8 @@ export function createAgentHandlers(ctx: DaemonContext): RpcMethodRegistry {
               currentRun: {
                 id: currentRun.id,
                 startedAt: currentRun.startedAt,
+                ...(currentSessionTarget ? { sessionTarget: currentSessionTarget } : {}),
+                ...(currentProjectId ? { projectId: currentProjectId } : {}),
               },
             }
             : {}),
@@ -326,8 +364,29 @@ export function createAgentHandlers(ctx: DaemonContext): RpcMethodRegistry {
         rpcError(RPC_ERRORS.NOT_FOUND, "Agent not found");
       }
 
+      const projectId = normalizeProjectId(p.projectId);
+
       // Refresh the session
-      ctx.executor.requestSessionRefresh(agent.name, "rpc:agent.refresh");
+      if (projectId) {
+        const project = ctx.db.getProjectById(projectId);
+        if (!project) {
+          rpcError(RPC_ERRORS.NOT_FOUND, "Project not found");
+        }
+
+        const isProjectMember =
+          project.speakerAgent === agent.name ||
+          ctx.db.listProjectLeaders(project.id, { activeOnly: false }).some((leader) => leader.agentName === agent.name);
+        if (!isProjectMember) {
+          rpcError(
+            RPC_ERRORS.INVALID_PARAMS,
+            `Agent '${agent.name}' is not bound to project '${project.id}'`
+          );
+        }
+
+        ctx.executor.requestSessionRefresh(agent.name, "rpc:agent.refresh", "project", project.id);
+      } else {
+        ctx.executor.requestSessionRefresh(agent.name, "rpc:agent.refresh", "auto-project");
+      }
 
       return { success: true, agentName: agent.name };
     },
