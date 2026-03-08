@@ -234,7 +234,7 @@ hiboss project select-leader --project-id <project-id> --require-capability impl
 ```
 
 Notes:
-- Project leader candidates are filtered by workspace match (`agent.workspace` must equal `project.root`).
+- Project leader candidates are selected from active project leaders and capability match; runtime execution workspace is resolved by project context.
 - Leader selection ranking considers health, busy state, and agent name.
 
 ## Agent

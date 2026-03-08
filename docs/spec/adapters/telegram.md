@@ -33,7 +33,9 @@ Telegram-specific parsing:
 ## Boss-only commands
 
 Telegram chat commands are boss-only (non-boss users get no reply):
-- `/new` — request a session refresh for the bound agent
+- `/new [project-id]` — request a session refresh for the bound agent:
+  - no arg: auto-targets project-scoped session when current run has a single project context
+  - with `project-id`: validates project membership and refreshes `<agent>:<project-id>`
 - `/status` — show `hiboss agent status` for the bound agent
 - `/abort` — cancel current run + clear **due** pending inbox for the bound agent
 

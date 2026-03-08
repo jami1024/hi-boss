@@ -224,6 +224,8 @@ Output (parseable):
 - `pending-count: <n>`
 - `current-run-id:` (optional; short id; when `agent-state=running` and a run record exists)
 - `current-run-started-at:` (optional; boss timezone offset)
+- `current-session-target:` (optional; current session cache target, e.g. `agent` or `agent:project-id`)
+- `current-project-id:` (optional; present when current run resolves to a project-scoped session target)
 - `last-run-id:` (optional; short id)
 - `last-run-status:` (`completed|failed|cancelled|none`)
 - `last-run-started-at:` (optional; boss timezone offset)
@@ -231,6 +233,25 @@ Output (parseable):
 - `last-run-context-length:` (optional; integer, when available)
   - Meaning: best-effort **final model-call size** for the last successful run (prompt + output); see `docs/spec/provider-clis.md#token-usage`.
 - `last-run-error:` (optional; only when `last-run-status=failed|cancelled`)
+
+---
+
+## `hiboss agent refresh`
+
+Requests a session refresh for an agent.
+
+Notes:
+- `--project-id` omitted: daemon uses auto-project targeting (refreshes project-scoped session when current run has a single project context; otherwise falls back to agent-scoped refresh).
+- `--project-id` provided: daemon validates project id + membership and refreshes the explicit `<agent>:<project-id>` session target.
+
+Flags:
+- `--name <name>` (required)
+- `--project-id <id>` (optional)
+- `--token <token>` (optional; defaults to `HIBOSS_TOKEN`; boss token required)
+
+Output (parseable):
+- `success: true|false`
+- `agent-name:`
 
 ---
 

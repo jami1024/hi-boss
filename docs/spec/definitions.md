@@ -21,9 +21,21 @@ Canonical mapping (selected):
 - `workItem.channelAllowlistStrict` → SQLite `work_item_channel_policies.strict_allowlist` → inferred policy behavior for `envelope.send`
 - `workItem.specialists[]` → SQLite `work_item_specialists.agent_name` → delegated specialist membership
 - `project.id` → SQLite `projects.id` → `--id` / `--project-id` (project commands) → `project-id:`
+- `agentRefresh.projectId` → `hiboss agent refresh --project-id` → RPC `agent.refresh.projectId` (optional explicit project-scoped refresh target)
 - `project.root` → SQLite `projects.root` → project workspace boundary for leader selection
 - `project.speakerAgent` → SQLite `projects.speaker_agent` → `project-speaker-agent:`
 - `project.leaders[]` → SQLite `project_leaders.agent_name` (+ `capabilities_json`, `active`) → `project-leaders:`
+- `projectTask.id` → SQLite `project_tasks.id` → `task-id:` (project task API payload)
+- `projectTask.state` → SQLite `project_tasks.state` → task lifecycle state (`created|planning|dispatched|executing|completed|cancelled`)
+- `projectTask.priority` → SQLite `project_tasks.priority` → task priority (`low|normal|high|critical`)
+- `taskProgress.taskId` → SQLite `task_progress.task_id` → project task progress linkage
+- `envelope.metadata.taskId` → daemon-injected task context key in project task envelopes
+- `remoteSkill.skillName` → filesystem `<target>/skills/<skill-name>/` + `.source.json` → `--name` (skill commands) → `skill-name:`
+- `remoteSkill.sourceUrl` → `.source.json.sourceUrl` → `--source` → `source-url:`
+- `remoteSkill.sourceRef` → `.source.json.sourceRef` → `--ref` → `source-ref:`
+- `remoteSkill.checksum` → `.source.json.checksum` → integrity output key `checksum:`
+- `projectMemory.entryName` → filesystem `<project.root>/.hiboss/memory/<entry-name>.md` → Web API path `:entryName`
+- `projectMemory.content` → UTF-8 file content under `<project.root>/.hiboss/memory/` → Web API `content` payload
 - `setupConfig.projects[]` → `setup --config-file` declarative input → SQLite `projects`
 - `setupConfig.projects[].leaders[]` → `setup --config-file` declarative input → SQLite `project_leaders`
 - `config.bossTimezone` → SQLite `config.boss_timezone` → setup `boss-timezone` → `boss-timezone:`
@@ -291,6 +303,33 @@ Table: `project_leaders` (see `src/daemon/db/schema.ts`)
 | `projectLeader.active` | `active` | `0/1`; leader eligibility flag |
 | `projectLeader.updatedAt` | `updated_at` | Unix epoch ms (UTC) |
 
+Table: `project_tasks` (see `src/daemon/db/schema.ts`)
+
+| Code (TypeScript) | SQLite column | Notes |
+|-------------------|---------------|-------|
+| `projectTask.id` | `id` | Primary key (`task-<short-id>`) |
+| `project.id` | `project_id` | FK to `projects.id` |
+| `projectTask.title` | `title` | Required task title |
+| `projectTask.state` | `state` | `created` / `planning` / `dispatched` / `executing` / `completed` / `cancelled` |
+| `projectTask.priority` | `priority` | `low` / `normal` / `high` / `critical` |
+| `projectTask.assignee` | `assignee` | Nullable current assignee agent name |
+| `projectTask.output` | `output` | Nullable output summary/path |
+| `projectTask.flowLog[]` | `flow_log` | JSON array of lifecycle/recovery flow entries |
+| `projectTask.createdAt` | `created_at` | Unix epoch ms (UTC) |
+| `projectTask.updatedAt` | `updated_at` | Unix epoch ms (UTC) |
+| `projectTask.completedAt` | `completed_at` | Unix epoch ms (UTC) (nullable) |
+
+Table: `task_progress` (see `src/daemon/db/schema.ts`)
+
+| Code (TypeScript) | SQLite column | Notes |
+|-------------------|---------------|-------|
+| `taskProgress.id` | `id` | Primary key |
+| `projectTask.id` | `task_id` | FK to `project_tasks.id` |
+| `taskProgress.agentName` | `agent_name` | Reporter agent name |
+| `taskProgress.content` | `content` | Progress summary text |
+| `taskProgress.todos[]` | `todos` | Nullable JSON todo snapshot |
+| `taskProgress.createdAt` | `created_at` | Unix epoch ms (UTC) |
+
 ### CLI
 
 Command flags:
@@ -393,12 +432,17 @@ Clearing nullable overrides:
 - `hiboss agent delete` prints:
   - `success: true|false`
   - `agent-name:`
+- `hiboss agent refresh` prints:
+  - `success: true|false`
+  - `agent-name:`
 - `hiboss agent list` prints fields like `created-at:` (timestamps are shown in boss timezone offset).
 - `hiboss agent status` prints:
   - `agent-state:` (`running|idle`)
   - `agent-health:` (`ok|error|unknown`)
   - `pending-count:` (counts due pending envelopes)
   - `current-run-id:` / `current-run-started-at:` (optional)
+  - `current-session-target:` (optional; `agent` or `agent:project-id`)
+  - `current-project-id:` (optional; only for project-scoped current run)
   - `last-run-status:` (`completed|failed|cancelled|none`)
   - `last-run-*:` fields (optional; see `docs/spec/cli/agents.md`)
 - In `hiboss agent status`, session policy is printed as:

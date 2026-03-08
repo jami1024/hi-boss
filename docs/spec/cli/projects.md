@@ -64,7 +64,7 @@ Flags:
 
 Selection policy:
 - Candidate set starts from `project_leaders` where `active=1`.
-- Candidates are dropped when the agent workspace does not match `project.root`.
+- Candidate workspace is not used as a hard filter; runtime workspace is resolved by project context when the selected leader executes project-scoped envelopes.
 - Candidates are filtered by required capabilities (all required capabilities must exist).
 - Remaining candidates are sorted by:
   1) health (`ok` > `unknown` > `error`),

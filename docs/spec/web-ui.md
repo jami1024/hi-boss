@@ -78,8 +78,12 @@ hiboss daemon start --token <boss-token> --no-web
 | POST | `/agents` | `agent.register` | 注册新 agent |
 | PUT | `/agents/:name` | `agent.set` | 更新 agent 配置 |
 | DELETE | `/agents/:name` | `agent.delete` | 删除 agent |
-| POST | `/agents/:name/refresh` | `agent.refresh` | 刷新 session |
+| POST | `/agents/:name/refresh` | `agent.refresh` | 刷新 session（可选 body: `{ projectId }`，用于定向刷新项目会话） |
 | POST | `/agents/:name/abort` | `agent.abort` | 中止当前运行 |
+| GET | `/agents/:name/skills/remote` | `skill.remote.list` | 列出该 agent 的远程技能 |
+| POST | `/agents/:name/skills/remote` | `skill.remote.add` | 安装远程技能 |
+| POST | `/agents/:name/skills/remote/:skillName/update` | `skill.remote.update` | 更新远程技能 |
+| DELETE | `/agents/:name/skills/remote/:skillName` | `skill.remote.remove` | 删除远程技能 |
 | PUT | `/agents/:name/session-policy` | `agent.session-policy.set` | 设置 session 策略 |
 | POST | `/agents/:name/bind` | `agent.bind` | 绑定 adapter |
 | POST | `/agents/:name/unbind` | `agent.unbind` | 解绑 adapter |
@@ -91,6 +95,19 @@ hiboss daemon start --token <boss-token> --no-web
 | GET | `/projects` | `project.list` | 列出项目 |
 | GET | `/projects/:id` | `project.get` | 项目详情 |
 | POST | `/projects/:id/select-leader` | `project.select-leader` | 选择 leader |
+| POST | `/projects/:id/tasks` | — | 创建项目任务（可自动派发给 speaker） |
+| GET | `/projects/:id/tasks` | — | 列出项目任务 |
+| GET | `/projects/:id/tasks/:taskId` | — | 项目任务详情（含进度与关联消息） |
+| POST | `/projects/:id/tasks/:taskId/state` | — | 更新项目任务状态 |
+| POST | `/projects/:id/tasks/:taskId/progress` | — | 追加项目任务进度 |
+| GET | `/projects/:id/skills/remote` | `skill.remote.list` | 列出项目远程技能 |
+| POST | `/projects/:id/skills/remote` | `skill.remote.add` | 安装项目远程技能 |
+| POST | `/projects/:id/skills/remote/:skillName/update` | `skill.remote.update` | 更新项目远程技能 |
+| DELETE | `/projects/:id/skills/remote/:skillName` | `skill.remote.remove` | 删除项目远程技能 |
+| GET | `/projects/:id/memory` | — | 列出项目共享记忆条目 |
+| GET | `/projects/:id/memory/:entryName` | — | 获取单条项目共享记忆内容 |
+| PUT | `/projects/:id/memory/:entryName` | — | 新增/更新项目共享记忆并触发会话刷新 |
+| DELETE | `/projects/:id/memory/:entryName` | — | 删除项目共享记忆并触发会话刷新 |
 
 ### Envelope
 
@@ -153,7 +170,17 @@ interface WsServerMessage {
   // envelope: 新消息推送
   envelope?: Envelope;
   // agent-status: agent 状态变更
-  status?: AgentStatusResult;
+  status?: {
+    agentState: "running" | "idle";
+    agentHealth: "ok" | "error" | "unknown";
+    pendingCount: number;
+    currentRun?: {
+      id: string;
+      startedAt: number;
+      sessionTarget?: string;
+      projectId?: string;
+    };
+  };
   // error
   message?: string;
 }
@@ -178,7 +205,10 @@ interface WsServerMessage {
 /agents/:name           → Agent 详情（状态、配置、session 策略）
 /agents/:name/chat      → 与 Agent 对话
 /projects               → 项目列表
-/projects/:id           → 项目详情（路径、speaker、leaders）
+/projects/:id           → 项目详情（路径、speaker、leaders、项目级远程技能管理）
+/projects/:id/memory    → 项目共享记忆管理（.hiboss/memory）
+/projects/:id/tasks     → 项目任务列表（创建、派发、状态总览）
+/projects/:id/tasks/:taskId → 项目任务详情（生命周期、进度、关联消息）
 /prompts                → 提示词模板编辑器
 /cli                    → CLI 配置管理
 /envelopes              → Envelope 列表与检索
@@ -216,6 +246,7 @@ interface WsServerMessage {
   - 编辑项目路径
   - 指定 speaker agent
   - 管理 leader agents（添加/移除、capabilities）
+  - 管理项目任务（创建、状态流转、进度查看）
 
 ### 提示词编辑器
 
