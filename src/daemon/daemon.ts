@@ -44,6 +44,7 @@ import {
   createAgentDeleteHandler,
   createWorkItemHandlers,
   createProjectHandlers,
+  createSkillHandlers,
 } from "./rpc/index.js";
 import { createChannelCommandHandler } from "./channel-commands.js";
 import { buildMissingAgentRolesGuidance } from "../shared/agent-role.js";
@@ -499,6 +500,7 @@ export class Daemon {
       ...createAgentDeleteHandler(ctx),
       ...createWorkItemHandlers(ctx),
       ...createProjectHandlers(ctx),
+      ...createSkillHandlers(ctx),
       ...createDaemonHandlers(ctx),
       ...createSetupHandlers(ctx),
     };

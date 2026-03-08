@@ -7,14 +7,70 @@
  */
 
 import type { Agent } from "./types.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { AgentBinding } from "../daemon/db/database.js";
 import { renderPrompt } from "../shared/prompt-renderer.js";
 import { buildSystemPromptContext } from "../shared/prompt-context.js";
+import { getAgentDir } from "./home-setup.js";
 import {
   ensureAgentInternalSpaceLayout,
   readAgentInternalDailyMemorySnapshot,
   readAgentInternalMemorySnapshot,
 } from "../shared/internal-space.js";
+
+const MAX_AGENT_SKILL_LINES = 30;
+
+function truncateSkillSummary(text: string, maxChars = 140): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}...`;
+}
+
+function extractSkillSummary(content: string): string {
+  const lines = content.split("\n").map((line) => line.trim());
+  let inFrontmatter = false;
+  for (const line of lines) {
+    if (!line) continue;
+    if (!inFrontmatter && line === "---") {
+      inFrontmatter = true;
+      continue;
+    }
+    if (inFrontmatter && line === "---") {
+      inFrontmatter = false;
+      continue;
+    }
+    if (inFrontmatter) continue;
+    if (line.startsWith("#")) continue;
+    return truncateSkillSummary(line);
+  }
+  return "(no summary)";
+}
+
+function readAgentSkillSummary(params: { hibossDir: string; agentName: string }): string[] {
+  const skillsRoot = path.join(getAgentDir(params.agentName, params.hibossDir), "skills");
+  try {
+    if (!fs.existsSync(skillsRoot)) return [];
+    const stat = fs.statSync(skillsRoot);
+    if (!stat.isDirectory()) return [];
+
+    return fs
+      .readdirSync(skillsRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b))
+      .slice(0, MAX_AGENT_SKILL_LINES)
+      .map((skillName) => {
+        const skillPath = path.join(skillsRoot, skillName, "SKILL.md");
+        if (!fs.existsSync(skillPath)) return `- ${skillName}: (missing SKILL.md)`;
+        const skillStat = fs.statSync(skillPath);
+        if (!skillStat.isFile()) return `- ${skillName}: (invalid SKILL.md)`;
+        const content = fs.readFileSync(skillPath, "utf8");
+        return `- ${skillName}: ${extractSkillSummary(content)}`;
+      });
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Context for generating system instructions.
@@ -24,6 +80,7 @@ export interface InstructionContext {
   agentToken: string;
   bindings?: AgentBinding[];
   additionalContext?: string;
+  runtimeWorkspace?: string;
   hibossDir?: string;
   bossTimezone?: string;
   boss?: {
@@ -57,6 +114,7 @@ export function generateSystemInstructions(ctx: InstructionContext): string {
     agent,
     agentToken,
     bindings: bindings ?? [],
+    runtimeWorkspace: ctx.runtimeWorkspace,
     time: { bossTimezone: ctx.bossTimezone },
     hibossDir: ctx.hibossDir,
     boss,
@@ -97,8 +155,20 @@ export function generateSystemInstructions(ctx: InstructionContext): string {
     }
   }
 
+  const agentSkillSummary = readAgentSkillSummary({ hibossDir, agentName: agent.name });
+  const additionalContextSections: string[] = [];
+  if (agentSkillSummary.length > 0) {
+    additionalContextSections.push("## agent-remote-skills", ...agentSkillSummary);
+  }
+  if (additionalContext?.trim()) {
+    if (additionalContextSections.length > 0) {
+      additionalContextSections.push("");
+    }
+    additionalContextSections.push(additionalContext.trim());
+  }
+
   (promptContext.hiboss as Record<string, unknown>).additionalContext =
-    additionalContext ?? "";
+    additionalContextSections.join("\n");
 
   return renderPrompt({
     surface: "system",

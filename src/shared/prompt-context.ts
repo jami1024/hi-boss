@@ -238,6 +238,7 @@ export function buildSystemPromptContext(params: {
   agent: Agent;
   agentToken: string;
   bindings: AgentBinding[];
+  runtimeWorkspace?: string;
   time?: {
     bossTimezone?: string;
   };
@@ -252,7 +253,9 @@ export function buildSystemPromptContext(params: {
   const daemonTimeZone = getDaemonIanaTimeZone();
 
   const workspaceDir =
-    params.agent.workspace && params.agent.workspace.trim()
+    params.runtimeWorkspace && params.runtimeWorkspace.trim()
+      ? params.runtimeWorkspace.trim()
+      : params.agent.workspace && params.agent.workspace.trim()
       ? params.agent.workspace.trim()
       : getDefaultRuntimeWorkspace();
 

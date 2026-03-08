@@ -58,16 +58,20 @@ export async function getOrCreateAgentSession(params: {
   db: HiBossDatabase;
   hibossDir: string;
   sessions: Map<string, AgentSession>;
-  applyPendingSessionRefresh: (agentName: string) => Promise<string[]>;
-  refreshSession: (agentName: string, reason?: string) => Promise<void>;
+  sessionKey: string;
+  workspaceOverride?: string;
+  additionalContext?: string;
+  persistSessionHandle?: boolean;
+  applyPendingSessionRefresh: (sessionTarget: string) => Promise<string[]>;
+  refreshSession: (sessionKeyOrAgentName: string, reason?: string) => Promise<void>;
   getSessionPolicy: (agent: Agent) => SessionPolicy;
   trigger?: AgentRunTrigger;
 }): Promise<AgentSession> {
   // Apply any pending refresh request at the first safe point (before a run).
-  const pendingRefreshReasons = await params.applyPendingSessionRefresh(params.agent.name);
+  const pendingRefreshReasons = await params.applyPendingSessionRefresh(params.sessionKey);
   const triggerFields = getTriggerFields(params.trigger);
 
-  let session = params.sessions.get(params.agent.name);
+  let session = params.sessions.get(params.sessionKey);
   let policyRefreshReason: string | null = null;
 
   // Apply policy-based refreshes before starting a new run.
@@ -76,7 +80,7 @@ export async function getOrCreateAgentSession(params: {
     const reason = getRefreshReasonForPolicy(session, policy, new Date());
     if (reason) {
       policyRefreshReason = reason;
-      await params.refreshSession(params.agent.name);
+      await params.refreshSession(params.sessionKey);
       session = undefined;
     }
   }
@@ -89,45 +93,53 @@ export async function getOrCreateAgentSession(params: {
     }
 
     const desiredProvider = params.agent.provider ?? DEFAULT_AGENT_PROVIDER;
-    const persisted = readPersistedAgentSession(agentRecord);
+    const shouldUsePersistedSessionHandle = params.persistSessionHandle ?? true;
+    const persisted = shouldUsePersistedSessionHandle ? readPersistedAgentSession(agentRecord) : null;
     // If a resumable session handle exists, prefer its provider.
     const provider =
       persisted?.handle.sessionId && (persisted.provider === "claude" || persisted.provider === "codex")
         ? persisted.provider
         : desiredProvider;
-    const workspace = params.agent.workspace ?? getDefaultRuntimeWorkspace();
+    const workspace = params.workspaceOverride ?? params.agent.workspace ?? getDefaultRuntimeWorkspace();
     const codexCumulativeUsageTotals =
       provider === "codex"
         ? parseCodexCumulativeUsageTotals(persisted?.handle.metadata?.codexCumulativeUsage)
         : undefined;
 
     try {
-      // Generate system instructions for inline injection
       const bindings = params.db.getBindingsByAgentName(params.agent.name);
       const boss = getBossInfo(params.db, bindings);
-      const instructions = generateSystemInstructions({
-        agent: params.agent,
-        agentToken: agentRecord.token,
-        bindings,
-        bossTimezone: params.db.getBossTimezone(),
-        hibossDir: params.hibossDir,
-        boss,
-      });
 
-      // Resolve session open mode (fresh vs resume)
       const { sessionId, createdAtMs, lastRunCompletedAtMs, openMode, openReason } =
-        resolveSessionOpenMode({
-          agent: params.agent,
-          agentRecord,
-          provider,
-          db: params.db,
-          policy: params.getSessionPolicy(params.agent),
-        });
+        shouldUsePersistedSessionHandle
+          ? resolveSessionOpenMode({
+            agent: params.agent,
+            agentRecord,
+            provider,
+            db: params.db,
+            policy: params.getSessionPolicy(params.agent),
+          })
+          : {
+            sessionId: undefined,
+            createdAtMs: Date.now(),
+            lastRunCompletedAtMs: undefined,
+            openMode: "open" as const,
+            openReason: "project-scoped-open",
+          };
 
       session = {
         provider,
         agentToken: agentRecord.token,
-        systemInstructions: instructions,
+        systemInstructions: generateSystemInstructions({
+          agent: params.agent,
+          agentToken: agentRecord.token,
+          bindings,
+          runtimeWorkspace: workspace,
+          bossTimezone: params.db.getBossTimezone(),
+          hibossDir: params.hibossDir,
+          boss,
+          additionalContext: params.additionalContext ?? "",
+        }),
         workspace,
         model: params.agent.model,
         reasoningEffort: params.agent.reasoningEffort,
@@ -136,7 +148,7 @@ export async function getOrCreateAgentSession(params: {
         ...(codexCumulativeUsageTotals ? { codexCumulativeUsageTotals } : {}),
         ...(lastRunCompletedAtMs !== undefined ? { lastRunCompletedAtMs } : {}),
       };
-      params.sessions.set(params.agent.name, session);
+      params.sessions.set(params.sessionKey, session);
 
       const refreshReasons = [...pendingRefreshReasons, ...(policyRefreshReason ? [policyRefreshReason] : [])];
       const event = openMode === "resume" ? "agent-session-load" : "agent-session-create";
@@ -146,6 +158,7 @@ export async function getOrCreateAgentSession(params: {
         ...(provider !== desiredProvider ? { "desired-provider": desiredProvider } : {}),
         state: "success",
         ...triggerFields,
+        "session-key": params.sessionKey,
         "open-mode": openMode,
         "open-reason": openReason,
         "refresh-reasons": refreshReasons.length > 0 ? refreshReasons.join(",") : undefined,
@@ -157,6 +170,7 @@ export async function getOrCreateAgentSession(params: {
         provider,
         state: "failed",
         ...triggerFields,
+        "session-key": params.sessionKey,
         error: errorMessage(err),
       });
       throw err;

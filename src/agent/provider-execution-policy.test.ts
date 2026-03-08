@@ -20,6 +20,13 @@ function makeEnvelope(from: string, fromBoss: boolean, text: string): Envelope {
   };
 }
 
+function makeProjectScopedEnvelope(from: string, fromBoss: boolean, text: string): Envelope {
+  return {
+    ...makeEnvelope(from, fromBoss, text),
+    metadata: { projectId: "prj-abc123" },
+  };
+}
+
 test("turn policy forces workspace sandbox for non-boss channel input", () => {
   const policy = resolveTurnExecutionPolicy({
     permissionLevel: "boss",
@@ -29,6 +36,18 @@ test("turn policy forces workspace sandbox for non-boss channel input", () => {
   assert.deepEqual(policy, {
     mode: "workspace-sandbox",
     reason: "untrusted-channel-input",
+  });
+});
+
+test("turn policy always forces workspace sandbox for project-scoped context", () => {
+  const policy = resolveTurnExecutionPolicy({
+    permissionLevel: "boss",
+    envelopes: [makeProjectScopedEnvelope("channel:feishu:oc_123", true, "edit code and run tests")],
+  });
+
+  assert.deepEqual(policy, {
+    mode: "workspace-sandbox",
+    reason: "project-scoped-sandbox",
   });
 });
 

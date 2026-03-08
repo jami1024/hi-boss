@@ -291,6 +291,7 @@ test("project leaders normalize capabilities and support active filter", () => {
       projectId: "repo.beta",
       agentName: "kai",
       capabilities: ["Review", "implement", "review", "  test  "],
+      allowDispatchTo: ["Leo", " leo ", "NEX"],
       active: true,
     });
     db.upsertProjectLeader({
@@ -306,7 +307,19 @@ test("project leaders normalize capabilities and support active filter", () => {
     const kai = allLeaders.find((leader) => leader.agentName === "kai");
     assert.ok(kai);
     assert.deepEqual(kai?.capabilities, ["implement", "review", "test"]);
+    assert.deepEqual(kai?.allowDispatchTo, ["leo", "nex"]);
     assert.equal(kai?.active, true);
+
+    db.upsertProjectLeader({
+      projectId: "repo.beta",
+      agentName: "kai",
+      allowDispatchTo: null,
+      active: true,
+    });
+    const kaiAfterReset = db
+      .listProjectLeaders("repo.beta", { activeOnly: false })
+      .find((leader) => leader.agentName === "kai");
+    assert.equal(kaiAfterReset?.allowDispatchTo, undefined);
 
     const activeOnly = db.listProjectLeaders("repo.beta", { activeOnly: true });
     assert.equal(activeOnly.length, 1);
@@ -315,5 +328,167 @@ test("project leaders normalize capabilities and support active filter", () => {
     const project = db.getProjectById("repo.beta");
     assert.ok(project);
     assert.equal(project?.leaders?.length, 2);
+  });
+});
+
+test("getPendingEnvelopesForAgent batches envelopes by projectId context", () => {
+  withTempDb((db) => {
+    db.registerAgent({
+      name: "nex",
+      provider: "codex",
+      role: "speaker",
+    });
+
+    db.createEnvelope({
+      from: "channel:web:boss",
+      to: "agent:nex",
+      fromBoss: true,
+      content: { text: "a-1" },
+      metadata: { source: "web", projectId: "prj-a" },
+    });
+    db.createEnvelope({
+      from: "channel:web:boss",
+      to: "agent:nex",
+      fromBoss: true,
+      content: { text: "a-2" },
+      metadata: { source: "web", projectId: "prj-a" },
+    });
+    db.createEnvelope({
+      from: "channel:web:boss",
+      to: "agent:nex",
+      fromBoss: true,
+      content: { text: "b-1" },
+      metadata: { source: "web", projectId: "prj-b" },
+    });
+    db.createEnvelope({
+      from: "channel:web:boss",
+      to: "agent:nex",
+      fromBoss: true,
+      content: { text: "free-1" },
+      metadata: { source: "web" },
+    });
+
+    const firstBatch = db.getPendingEnvelopesForAgent("nex", 10);
+    assert.equal(firstBatch.length, 2);
+    assert.deepEqual(
+      firstBatch.map((env) => (env.metadata as Record<string, unknown> | undefined)?.projectId),
+      ["prj-a", "prj-a"]
+    );
+
+    db.markEnvelopesDone(firstBatch.map((env) => env.id));
+
+    const secondBatch = db.getPendingEnvelopesForAgent("nex", 10);
+    assert.equal(secondBatch.length, 1);
+    assert.equal((secondBatch[0]?.metadata as Record<string, unknown> | undefined)?.projectId, "prj-b");
+
+    db.markEnvelopesDone(secondBatch.map((env) => env.id));
+
+    const thirdBatch = db.getPendingEnvelopesForAgent("nex", 10);
+    assert.equal(thirdBatch.length, 1);
+    assert.equal((thirdBatch[0]?.metadata as Record<string, unknown> | undefined)?.projectId, undefined);
+  });
+});
+
+test("listProjectChatEnvelopes returns only project-scoped boss/speaker messages", () => {
+  withTempDb((db) => {
+    db.createEnvelope({
+      from: "channel:web:boss",
+      to: "agent:nex",
+      fromBoss: true,
+      content: { text: "project-a inbound" },
+      metadata: { source: "web", projectId: "prj-a" },
+    });
+    db.createEnvelope({
+      from: "agent:nex",
+      to: "channel:web:boss",
+      content: { text: "project-a outbound" },
+      metadata: { projectId: "prj-a" },
+    });
+    db.createEnvelope({
+      from: "channel:web:boss",
+      to: "agent:nex",
+      fromBoss: true,
+      content: { text: "project-b inbound" },
+      metadata: { source: "web", projectId: "prj-b" },
+    });
+    db.createEnvelope({
+      from: "channel:web:boss",
+      to: "agent:kai",
+      fromBoss: true,
+      content: { text: "project-a wrong target" },
+      metadata: { source: "web", projectId: "prj-a" },
+    });
+
+    const rows = db.listProjectChatEnvelopes({
+      projectId: "prj-a",
+      speakerAddress: "agent:nex",
+      bossAddress: "channel:web:boss",
+      limit: 50,
+    });
+
+    assert.equal(rows.length, 2);
+    assert(rows.every((row) => (row.metadata as Record<string, unknown> | undefined)?.projectId === "prj-a"));
+    assert.deepEqual(
+      rows.map((row) => row.content.text),
+      ["project-a outbound", "project-a inbound"]
+    );
+  });
+});
+
+test("project task lifecycle and progress persistence work end-to-end", () => {
+  withTempDb((db) => {
+    db.registerAgent({ name: "nex", provider: "codex", role: "speaker" });
+    db.registerAgent({ name: "kai", provider: "codex", role: "leader" });
+    db.upsertProject({
+      id: "repo.task",
+      name: "repo-task",
+      root: "/tmp/repo-task",
+      speakerAgent: "nex",
+    });
+
+    const task = db.createProjectTask({
+      projectId: "repo.task",
+      title: "Implement project task API",
+      priority: "high",
+      actor: "channel:web:boss",
+      reason: "boss-created",
+    });
+    assert.equal(task.state, "created");
+    assert.equal(task.priority, "high");
+
+    const planning = db.updateProjectTaskState({
+      taskId: task.id,
+      state: "planning",
+      actor: "nex",
+      reason: "start-plan",
+    });
+    assert.equal(planning.state, "planning");
+
+    const dispatched = db.updateProjectTaskState({
+      taskId: task.id,
+      state: "dispatched",
+      actor: "nex",
+      assignee: "kai",
+      reason: "dispatch-to-leader",
+    });
+    assert.equal(dispatched.assignee, "kai");
+
+    const progress = db.createTaskProgress({
+      taskId: task.id,
+      agentName: "kai",
+      content: "Implemented handlers",
+      todos: ["db done", "web doing"],
+    });
+    assert.equal(progress.agentName, "kai");
+    assert.deepEqual(progress.todos, ["db done", "web doing"]);
+
+    const listed = db.listProjectTasks({ projectId: "repo.task", limit: 10 });
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0]?.flowLog.length, 3);
+    assert.equal(listed[0]?.state, "dispatched");
+
+    const progressRows = db.listTaskProgress({ taskId: task.id, limit: 10 });
+    assert.equal(progressRows.length, 1);
+    assert.equal(progressRows[0]?.content, "Implemented handlers");
   });
 });

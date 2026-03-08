@@ -24,6 +24,18 @@ import { assertValidAgentName } from "../../shared/validation.js";
 import { getDaemonIanaTimeZone } from "../../shared/timezone.js";
 import type { Project, ProjectLeader } from "../../shared/project.js";
 import type {
+  ProjectTask,
+  ProjectTaskFlowEntry,
+  ProjectTaskPriority,
+  ProjectTaskState,
+  TaskProgress,
+} from "../../shared/project-task.js";
+import {
+  canTransitionProjectTaskState,
+  isProjectTaskPriority,
+  isProjectTaskState,
+} from "../../shared/project-task.js";
+import type {
   WorkItem,
   WorkItemSpecialistAssignment,
   WorkItemState,
@@ -143,8 +155,32 @@ interface ProjectLeaderRow {
   project_id: string;
   agent_name: string;
   capabilities_json: string | null;
+  allow_dispatch_to: string | null;
   active: number;
   updated_at: number;
+}
+
+interface ProjectTaskRow {
+  id: string;
+  project_id: string;
+  title: string;
+  state: string;
+  priority: string;
+  assignee: string | null;
+  output: string | null;
+  flow_log: string | null;
+  created_at: number;
+  updated_at: number;
+  completed_at: number | null;
+}
+
+interface TaskProgressRow {
+  id: string;
+  task_id: string;
+  agent_name: string;
+  content: string;
+  todos: string | null;
+  created_at: number;
 }
 
 /**
@@ -194,6 +230,7 @@ export class HiBossDatabase {
     this.preflightLegacyWorkItemSchema();
     this.db.exec(SCHEMA_SQL);
     this.migrateWorkItemSchema();
+    this.migrateProjectLeaderSchema();
     this.assertSchemaCompatible();
     this.reconcileStaleAgentRunsOnStartup();
   }
@@ -237,6 +274,16 @@ export class HiBossDatabase {
     maybeAddColumn("orchestrator_agent", "TEXT");
     maybeAddColumn("main_group_channel", "TEXT");
     maybeAddColumn("requirement_group_channel", "TEXT");
+  }
+
+  private migrateProjectLeaderSchema(): void {
+    const info = this.db.prepare("PRAGMA table_info(project_leaders)").all() as Array<{ name: string }>;
+    if (info.length === 0) return;
+
+    const existing = new Set(info.map((column) => column.name));
+    if (!existing.has("allow_dispatch_to")) {
+      this.db.exec("ALTER TABLE project_leaders ADD COLUMN allow_dispatch_to TEXT");
+    }
   }
 
   private assertSchemaCompatible(): void {
@@ -346,8 +393,30 @@ export class HiBossDatabase {
         "project_id",
         "agent_name",
         "capabilities_json",
+        "allow_dispatch_to",
         "active",
         "updated_at",
+      ],
+      project_tasks: [
+        "id",
+        "project_id",
+        "title",
+        "state",
+        "priority",
+        "assignee",
+        "output",
+        "flow_log",
+        "created_at",
+        "updated_at",
+        "completed_at",
+      ],
+      task_progress: [
+        "id",
+        "task_id",
+        "agent_name",
+        "content",
+        "todos",
+        "created_at",
       ],
     };
 
@@ -373,6 +442,10 @@ export class HiBossDatabase {
       { table: "projects", column: "updated_at" },
       { table: "project_leaders", column: "active" },
       { table: "project_leaders", column: "updated_at" },
+      { table: "project_tasks", column: "created_at" },
+      { table: "project_tasks", column: "updated_at" },
+      { table: "project_tasks", column: "completed_at" },
+      { table: "task_progress", column: "created_at" },
     ];
 
     for (const [table, requiredColumns] of Object.entries(requiredColumnsByTable)) {
@@ -1042,6 +1115,68 @@ export class HiBossDatabase {
     return rows.map((row) => this.rowToEnvelope(row));
   }
 
+  listProjectChatEnvelopes(options: {
+    projectId: string;
+    speakerAddress: string;
+    bossAddress: string;
+    limit: number;
+    createdBefore?: number;
+  }): Envelope[] {
+    const { projectId, speakerAddress, bossAddress, limit, createdBefore } = options;
+    let sql = `
+      SELECT * FROM envelopes
+      WHERE json_extract(metadata, '$.projectId') = ?
+        AND (("from" = ? AND "to" = ?) OR ("from" = ? AND "to" = ?))
+    `;
+    const params: Array<string | number> = [
+      projectId,
+      bossAddress,
+      speakerAddress,
+      speakerAddress,
+      bossAddress,
+    ];
+
+    if (typeof createdBefore === "number") {
+      sql += " AND created_at <= ?";
+      params.push(createdBefore);
+    }
+
+    sql += " ORDER BY created_at DESC LIMIT ?";
+    params.push(limit);
+
+    const stmt = this.db.prepare(sql);
+    const rows = stmt.all(...params) as EnvelopeRow[];
+    return rows.map((row) => this.rowToEnvelope(row));
+  }
+
+  listTaskEnvelopes(options: {
+    taskId: string;
+    limit?: number;
+    createdBefore?: number;
+  }): Envelope[] {
+    const limit =
+      typeof options.limit === "number" && Number.isFinite(options.limit)
+        ? Math.max(1, Math.trunc(options.limit))
+        : 100;
+    let sql = `
+      SELECT * FROM envelopes
+      WHERE json_extract(metadata, '$.taskId') = ?
+    `;
+    const params: Array<string | number> = [options.taskId];
+
+    if (typeof options.createdBefore === "number") {
+      sql += " AND created_at <= ?";
+      params.push(options.createdBefore);
+    }
+
+    sql += " ORDER BY created_at DESC LIMIT ?";
+    params.push(limit);
+
+    const stmt = this.db.prepare(sql);
+    const rows = stmt.all(...params) as EnvelopeRow[];
+    return rows.map((row) => this.rowToEnvelope(row));
+  }
+
   /**
    * Update envelope status.
    */
@@ -1057,6 +1192,19 @@ export class HiBossDatabase {
     const value = metadata ? JSON.stringify(metadata) : null;
     const stmt = this.db.prepare("UPDATE envelopes SET metadata = ? WHERE id = ?");
     stmt.run(value, id);
+  }
+
+  private extractProjectIdFromEnvelopeMetadata(metadataRaw: string | null): string | undefined {
+    if (!metadataRaw) return undefined;
+    try {
+      const metadata = JSON.parse(metadataRaw) as Record<string, unknown>;
+      const projectId = metadata.projectId;
+      if (typeof projectId !== "string") return undefined;
+      const normalized = projectId.trim();
+      return normalized.length > 0 ? normalized : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private rowToEnvelope(row: EnvelopeRow): Envelope {
@@ -1493,14 +1641,41 @@ export class HiBossDatabase {
   getPendingEnvelopesForAgent(agentName: string, limit: number): Envelope[] {
     const address = `agent:${agentName}`;
     const nowMs = Date.now();
-    const stmt = this.db.prepare(`
+    const firstStmt = this.db.prepare(`
       SELECT * FROM envelopes
       WHERE "to" = ? AND status = 'pending'
         AND (deliver_at IS NULL OR deliver_at <= ?)
       ORDER BY COALESCE(deliver_at, created_at) ASC, created_at ASC
-      LIMIT ?
+      LIMIT 1
     `);
-    const rows = stmt.all(address, nowMs, limit) as EnvelopeRow[];
+    const firstRow = firstStmt.get(address, nowMs) as EnvelopeRow | undefined;
+    if (!firstRow) return [];
+
+    const firstProjectId = this.extractProjectIdFromEnvelopeMetadata(firstRow.metadata);
+    const sql =
+      typeof firstProjectId === "string"
+        ? `
+      SELECT * FROM envelopes
+      WHERE "to" = ? AND status = 'pending'
+        AND (deliver_at IS NULL OR deliver_at <= ?)
+        AND json_extract(metadata, '$.projectId') = ?
+      ORDER BY COALESCE(deliver_at, created_at) ASC, created_at ASC
+      LIMIT ?
+    `
+        : `
+      SELECT * FROM envelopes
+      WHERE "to" = ? AND status = 'pending'
+        AND (deliver_at IS NULL OR deliver_at <= ?)
+        AND json_extract(metadata, '$.projectId') IS NULL
+      ORDER BY COALESCE(deliver_at, created_at) ASC, created_at ASC
+      LIMIT ?
+    `;
+
+    const stmt = this.db.prepare(sql);
+    const rows =
+      typeof firstProjectId === "string"
+        ? (stmt.all(address, nowMs, firstProjectId, limit) as EnvelopeRow[])
+        : (stmt.all(address, nowMs, limit) as EnvelopeRow[]);
     return rows.map((row) => this.rowToEnvelope(row));
   }
 
@@ -1796,7 +1971,7 @@ export class HiBossDatabase {
       SELECT id, work_item_id, from_state, to_state, actor, reason, created_at
       FROM work_item_transitions
       WHERE work_item_id = ?
-      ORDER BY created_at DESC, id DESC
+      ORDER BY created_at DESC, rowid DESC
       LIMIT ?
     `);
     const rows = stmt.all(workItemId, Math.max(1, Math.trunc(limit))) as WorkItemTransitionRow[];
@@ -2064,6 +2239,28 @@ export class HiBossDatabase {
     return project;
   }
 
+  getProjectBySpeakerAgent(agentName: string): Project | null {
+    const normalized = agentName.trim();
+    if (!normalized) return null;
+    const stmt = this.db.prepare("SELECT * FROM projects WHERE speaker_agent = ? LIMIT 1");
+    const row = stmt.get(normalized) as ProjectRow | undefined;
+    if (!row) return null;
+    const project = this.rowToProject(row);
+    project.leaders = this.listProjectLeaders(project.id, { activeOnly: false });
+    return project;
+  }
+
+  getProjectByMainGroupChannel(channelAddress: string): Project | null {
+    const normalized = channelAddress.trim();
+    if (!normalized) return null;
+    const stmt = this.db.prepare("SELECT * FROM projects WHERE main_group_channel = ? LIMIT 1");
+    const row = stmt.get(normalized) as ProjectRow | undefined;
+    if (!row) return null;
+    const project = this.rowToProject(row);
+    project.leaders = this.listProjectLeaders(project.id, { activeOnly: false });
+    return project;
+  }
+
   listProjects(options?: { limit?: number }): Project[] {
     const limit =
       typeof options?.limit === "number" && Number.isFinite(options.limit)
@@ -2123,9 +2320,11 @@ export class HiBossDatabase {
     projectId: string;
     agentName: string;
     capabilities?: string[];
+    allowDispatchTo?: string[] | null;
     active?: boolean;
   }): ProjectLeader {
     const now = Date.now();
+    const hasAllowDispatchTo = Object.hasOwn(input, "allowDispatchTo");
     const normalizedCaps =
       (input.capabilities ?? [])
         .map((c) => c.trim())
@@ -2133,14 +2332,21 @@ export class HiBossDatabase {
         .map((c) => c.toLowerCase())
         .filter((value, index, all) => all.indexOf(value) === index)
         .sort((a, b) => a.localeCompare(b)) ?? [];
+    const normalizedDispatchAllowlist = hasAllowDispatchTo
+      ? this.normalizeDispatchAllowlist(input.allowDispatchTo)
+      : null;
 
     const stmt = this.db.prepare(`
-      INSERT INTO project_leaders (project_id, agent_name, capabilities_json, active, updated_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO project_leaders (project_id, agent_name, capabilities_json, allow_dispatch_to, active, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(project_id, agent_name) DO UPDATE SET
         capabilities_json = CASE
           WHEN excluded.capabilities_json IS NOT NULL THEN excluded.capabilities_json
           ELSE project_leaders.capabilities_json
+        END,
+        allow_dispatch_to = CASE
+          WHEN ? = 1 THEN excluded.allow_dispatch_to
+          ELSE project_leaders.allow_dispatch_to
         END,
         active = excluded.active,
         updated_at = excluded.updated_at
@@ -2149,12 +2355,14 @@ export class HiBossDatabase {
       input.projectId,
       input.agentName,
       normalizedCaps.length > 0 ? JSON.stringify(normalizedCaps) : null,
+      normalizedDispatchAllowlist,
       input.active === false ? 0 : 1,
-      now
+      now,
+      hasAllowDispatchTo ? 1 : 0
     );
 
     const rowStmt = this.db.prepare(`
-      SELECT project_id, agent_name, capabilities_json, active, updated_at
+      SELECT project_id, agent_name, capabilities_json, allow_dispatch_to, active, updated_at
       FROM project_leaders
       WHERE project_id = ? AND agent_name = ?
       LIMIT 1
@@ -2169,7 +2377,7 @@ export class HiBossDatabase {
   listProjectLeaders(projectId: string, options?: { activeOnly?: boolean }): ProjectLeader[] {
     const activeOnly = options?.activeOnly === true;
     const stmt = this.db.prepare(`
-      SELECT project_id, agent_name, capabilities_json, active, updated_at
+      SELECT project_id, agent_name, capabilities_json, allow_dispatch_to, active, updated_at
       FROM project_leaders
       WHERE project_id = ?
         AND (? = 0 OR active = 1)
@@ -2181,6 +2389,34 @@ export class HiBossDatabase {
 
   private parseCapabilitiesJson(raw: string | null): string[] {
     if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+        .map((item) => item.toLowerCase())
+        .filter((value, index, all) => all.indexOf(value) === index)
+        .sort((a, b) => a.localeCompare(b));
+    } catch {
+      return [];
+    }
+  }
+
+  private normalizeDispatchAllowlist(input: string[] | null | undefined): string | null {
+    if (input === null) return null;
+    const normalized = (input ?? [])
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0)
+      .map((value) => value.toLowerCase())
+      .filter((value, index, all) => all.indexOf(value) === index)
+      .sort((a, b) => a.localeCompare(b));
+    return JSON.stringify(normalized);
+  }
+
+  private parseDispatchAllowlistJson(raw: string | null): string[] | undefined {
+    if (raw === null) return undefined;
     try {
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed)) return [];
@@ -2209,13 +2445,380 @@ export class HiBossDatabase {
   }
 
   private rowToProjectLeader(row: ProjectLeaderRow): ProjectLeader {
+    const allowDispatchTo = this.parseDispatchAllowlistJson(row.allow_dispatch_to);
     return {
       projectId: row.project_id,
       agentName: row.agent_name,
       capabilities: this.parseCapabilitiesJson(row.capabilities_json),
+      ...(allowDispatchTo ? { allowDispatchTo } : {}),
       active: row.active === 1,
       updatedAt: row.updated_at,
     };
+  }
+
+  private normalizeProjectTaskPriority(input?: string): ProjectTaskPriority {
+    if (!input) return "normal";
+    const normalized = input.trim().toLowerCase();
+    return isProjectTaskPriority(normalized) ? normalized : "normal";
+  }
+
+  private parseProjectTaskFlowLog(raw: string | null): ProjectTaskFlowEntry[] {
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+        .map((entry) => {
+          const toState =
+            typeof entry.toState === "string" && isProjectTaskState(entry.toState)
+              ? entry.toState
+              : undefined;
+          const fromState =
+            typeof entry.fromState === "string" && isProjectTaskState(entry.fromState)
+              ? entry.fromState
+              : undefined;
+          const actor = typeof entry.actor === "string" && entry.actor.trim() ? entry.actor.trim() : undefined;
+          const reason = typeof entry.reason === "string" && entry.reason.trim() ? entry.reason.trim() : undefined;
+          const at = typeof entry.at === "number" && Number.isFinite(entry.at) ? entry.at : undefined;
+          if (!toState || at === undefined) return null;
+          return {
+            ...(fromState ? { fromState } : {}),
+            toState,
+            ...(actor ? { actor } : {}),
+            ...(reason ? { reason } : {}),
+            at,
+          };
+        })
+        .filter((entry): entry is ProjectTaskFlowEntry => Boolean(entry));
+    } catch {
+      return [];
+    }
+  }
+
+  private parseTaskTodos(raw: string | null): string[] | undefined {
+    if (!raw) return undefined;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return undefined;
+      const todos = parsed
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+      return todos.length > 0 ? todos : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private rowToProjectTask(row: ProjectTaskRow): ProjectTask {
+    const state = isProjectTaskState(row.state) ? row.state : "created";
+    const priority = this.normalizeProjectTaskPriority(row.priority);
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      title: row.title,
+      state,
+      priority,
+      ...(row.assignee ? { assignee: row.assignee } : {}),
+      ...(row.output ? { output: row.output } : {}),
+      flowLog: this.parseProjectTaskFlowLog(row.flow_log),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      ...(typeof row.completed_at === "number" ? { completedAt: row.completed_at } : {}),
+    };
+  }
+
+  private rowToTaskProgress(row: TaskProgressRow): TaskProgress {
+    const todos = this.parseTaskTodos(row.todos);
+    return {
+      id: row.id,
+      taskId: row.task_id,
+      agentName: row.agent_name,
+      content: row.content,
+      ...(todos ? { todos } : {}),
+      createdAt: row.created_at,
+    };
+  }
+
+  createProjectTask(input: {
+    projectId: string;
+    title: string;
+    priority?: string;
+    assignee?: string;
+    output?: string;
+    actor?: string;
+    reason?: string;
+  }): ProjectTask {
+    const project = this.getProjectById(input.projectId);
+    if (!project) {
+      throw new Error(`Project '${input.projectId}' not found`);
+    }
+
+    const now = Date.now();
+    const id = `task-${generateUUID().replace(/-/g, "").slice(0, 12)}`;
+    const title = input.title.trim();
+    if (!title) {
+      throw new Error("Task title is required");
+    }
+    const priority = this.normalizeProjectTaskPriority(input.priority);
+    const flowLog: ProjectTaskFlowEntry[] = [
+      {
+        toState: "created",
+        ...(input.actor ? { actor: input.actor } : {}),
+        ...(input.reason ? { reason: input.reason } : {}),
+        at: now,
+      },
+    ];
+
+    const stmt = this.db.prepare(`
+      INSERT INTO project_tasks (id, project_id, title, state, priority, assignee, output, flow_log, created_at, updated_at, completed_at)
+      VALUES (?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, NULL)
+    `);
+    stmt.run(
+      id,
+      project.id,
+      title,
+      priority,
+      input.assignee?.trim() || null,
+      input.output?.trim() || null,
+      JSON.stringify(flowLog),
+      now,
+      now
+    );
+
+    const task = this.getProjectTaskById(id);
+    if (!task) {
+      throw new Error("Failed to persist project task");
+    }
+    return task;
+  }
+
+  getProjectTaskById(taskId: string): ProjectTask | null {
+    const stmt = this.db.prepare(`
+      SELECT id, project_id, title, state, priority, assignee, output, flow_log, created_at, updated_at, completed_at
+      FROM project_tasks
+      WHERE id = ?
+      LIMIT 1
+    `);
+    const row = stmt.get(taskId) as ProjectTaskRow | undefined;
+    return row ? this.rowToProjectTask(row) : null;
+  }
+
+  listProjectTasks(options: {
+    projectId: string;
+    limit?: number;
+    state?: ProjectTaskState;
+  }): ProjectTask[] {
+    const limit =
+      typeof options.limit === "number" && Number.isFinite(options.limit)
+        ? Math.max(1, Math.trunc(options.limit))
+        : 100;
+    const params: Array<string | number> = [options.projectId];
+    let sql = `
+      SELECT id, project_id, title, state, priority, assignee, output, flow_log, created_at, updated_at, completed_at
+      FROM project_tasks
+      WHERE project_id = ?
+    `;
+    if (options.state) {
+      sql += " AND state = ?";
+      params.push(options.state);
+    }
+    sql += " ORDER BY updated_at DESC, created_at DESC LIMIT ?";
+    params.push(limit);
+    const stmt = this.db.prepare(sql);
+    const rows = stmt.all(...params) as ProjectTaskRow[];
+    return rows.map((row) => this.rowToProjectTask(row));
+  }
+
+  listActiveProjectTasks(limit = 200): ProjectTask[] {
+    const stmt = this.db.prepare(`
+      SELECT id, project_id, title, state, priority, assignee, output, flow_log, created_at, updated_at, completed_at
+      FROM project_tasks
+      WHERE state NOT IN ('completed', 'cancelled')
+      ORDER BY updated_at ASC, created_at ASC
+      LIMIT ?
+    `);
+    const rows = stmt.all(Math.max(1, Math.trunc(limit))) as ProjectTaskRow[];
+    return rows.map((row) => this.rowToProjectTask(row));
+  }
+
+  getLatestTaskProgressAt(taskId: string): number | undefined {
+    const stmt = this.db.prepare(`
+      SELECT MAX(created_at) AS last_created_at
+      FROM task_progress
+      WHERE task_id = ?
+    `);
+    const row = stmt.get(taskId) as { last_created_at: number | null } | undefined;
+    return typeof row?.last_created_at === "number" ? row.last_created_at : undefined;
+  }
+
+  appendProjectTaskFlowEntry(input: {
+    taskId: string;
+    actor?: string;
+    reason: string;
+    at?: number;
+  }): ProjectTask {
+    const existing = this.getProjectTaskById(input.taskId);
+    if (!existing) {
+      throw new Error(`Task '${input.taskId}' not found`);
+    }
+
+    const at = input.at ?? Date.now();
+    const flowLog: ProjectTaskFlowEntry[] = [
+      ...existing.flowLog,
+      {
+        fromState: existing.state,
+        toState: existing.state,
+        ...(input.actor ? { actor: input.actor } : {}),
+        reason: input.reason,
+        at,
+      },
+    ];
+
+    const stmt = this.db.prepare(`
+      UPDATE project_tasks
+      SET flow_log = ?, updated_at = ?
+      WHERE id = ?
+    `);
+    stmt.run(JSON.stringify(flowLog), at, existing.id);
+
+    const task = this.getProjectTaskById(existing.id);
+    if (!task) {
+      throw new Error("Failed to append project task flow entry");
+    }
+    return task;
+  }
+
+  updateProjectTaskState(input: {
+    taskId: string;
+    state: ProjectTaskState;
+    actor?: string;
+    reason?: string;
+    assignee?: string | null;
+    output?: string | null;
+    allowRollback?: boolean;
+  }): ProjectTask {
+    const existing = this.getProjectTaskById(input.taskId);
+    if (!existing) {
+      throw new Error(`Task '${input.taskId}' not found`);
+    }
+
+    if (!input.allowRollback && !canTransitionProjectTaskState(existing.state, input.state)) {
+      throw new Error(`Invalid task state transition (${existing.state} -> ${input.state})`);
+    }
+
+    const now = Date.now();
+    const flowLog: ProjectTaskFlowEntry[] = [...existing.flowLog];
+    if (existing.state !== input.state) {
+      flowLog.push({
+        fromState: existing.state,
+        toState: input.state,
+        ...(input.actor ? { actor: input.actor } : {}),
+        ...(input.reason ? { reason: input.reason } : {}),
+        at: now,
+      });
+    }
+
+    const hasAssignee = Object.hasOwn(input, "assignee");
+    const hasOutput = Object.hasOwn(input, "output");
+    const assignee = hasAssignee
+      ? input.assignee?.trim() || null
+      : existing.assignee ?? null;
+    const output = hasOutput
+      ? input.output?.trim() || null
+      : existing.output ?? null;
+    const completedAt = input.state === "completed" ? now : null;
+
+    const stmt = this.db.prepare(`
+      UPDATE project_tasks
+      SET state = ?,
+          assignee = ?,
+          output = ?,
+          flow_log = ?,
+          updated_at = ?,
+          completed_at = ?
+      WHERE id = ?
+    `);
+    stmt.run(
+      input.state,
+      assignee,
+      output,
+      JSON.stringify(flowLog),
+      now,
+      completedAt,
+      input.taskId
+    );
+
+    const task = this.getProjectTaskById(input.taskId);
+    if (!task) {
+      throw new Error("Failed to persist project task state");
+    }
+    return task;
+  }
+
+  createTaskProgress(input: {
+    taskId: string;
+    agentName: string;
+    content: string;
+    todos?: string[];
+  }): TaskProgress {
+    const task = this.getProjectTaskById(input.taskId);
+    if (!task) {
+      throw new Error(`Task '${input.taskId}' not found`);
+    }
+
+    const content = input.content.trim();
+    if (!content) {
+      throw new Error("Task progress content is required");
+    }
+
+    const id = generateUUID();
+    const now = Date.now();
+    const todos = (input.todos ?? [])
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+
+    const stmt = this.db.prepare(`
+      INSERT INTO task_progress (id, task_id, agent_name, content, todos, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(
+      id,
+      task.id,
+      input.agentName,
+      content,
+      todos.length > 0 ? JSON.stringify(todos) : null,
+      now
+    );
+
+    const rowStmt = this.db.prepare(`
+      SELECT id, task_id, agent_name, content, todos, created_at
+      FROM task_progress
+      WHERE id = ?
+      LIMIT 1
+    `);
+    const row = rowStmt.get(id) as TaskProgressRow | undefined;
+    if (!row) {
+      throw new Error("Failed to persist task progress");
+    }
+    return this.rowToTaskProgress(row);
+  }
+
+  listTaskProgress(options: { taskId: string; limit?: number }): TaskProgress[] {
+    const limit =
+      typeof options.limit === "number" && Number.isFinite(options.limit)
+        ? Math.max(1, Math.trunc(options.limit))
+        : 200;
+    const stmt = this.db.prepare(`
+      SELECT id, task_id, agent_name, content, todos, created_at
+      FROM task_progress
+      WHERE task_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(options.taskId, limit) as TaskProgressRow[];
+    return rows.map((row) => this.rowToTaskProgress(row));
   }
 
   // ==================== Config Operations ====================

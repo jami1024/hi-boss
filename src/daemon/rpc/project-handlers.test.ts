@@ -113,7 +113,7 @@ test("project.list and project.get return persisted project views", async () => 
   });
 });
 
-test("project.select-leader applies capability/workspace/busy/health ranking", async () => {
+test("project.select-leader applies capability/busy/health ranking", async () => {
   await withTempDb(async (db, tempDir) => {
     const projectRoot = path.join(tempDir, "repo-rank");
     const { token: speakerToken } = db.registerAgent({
@@ -205,7 +205,7 @@ test("project.select-leader applies capability/workspace/busy/health ranking", a
     assert.equal(result.selected?.agentHealth, "ok");
     assert.deepEqual(
       result.candidates.map((candidate) => candidate.agentName),
-      ["leo", "kai"]
+      ["leo", "kai", "zoe"]
     );
   });
 });

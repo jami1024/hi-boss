@@ -2,6 +2,7 @@ export interface ProjectLeader {
   projectId: string;
   agentName: string;
   capabilities: string[];
+  allowDispatchTo?: string[];
   active: boolean;
   updatedAt: number;
 }

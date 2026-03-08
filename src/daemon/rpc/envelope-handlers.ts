@@ -96,6 +96,91 @@ function parseCapabilityList(capabilityHint?: string): string[] {
     .sort((a, b) => a.localeCompare(b));
 }
 
+function readProjectIdFromEnvelopeMetadata(metadata: Record<string, unknown> | undefined): string | undefined {
+  if (!metadata) return undefined;
+  const projectId = metadata.projectId;
+  if (typeof projectId !== "string") return undefined;
+  const normalized = projectId.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function readTaskIdFromEnvelopeMetadata(metadata: Record<string, unknown> | undefined): string | undefined {
+  if (!metadata) return undefined;
+  const taskId = metadata.taskId;
+  if (typeof taskId !== "string") return undefined;
+  const normalized = taskId.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function parseTaskProgressReport(text: string | undefined): { content: string; todos?: string[] } | null {
+  if (!text) return null;
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length === 0) return null;
+  const head = lines[0].toLowerCase();
+  if (!head.startsWith("progress:")) return null;
+
+  const content = lines[0].slice("progress:".length).trim();
+  const todosLine = lines.find((line) => line.toLowerCase().startsWith("todos:"));
+  const todos = todosLine
+    ? todosLine
+        .slice("todos:".length)
+        .split(/[;,]/)
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+    : [];
+
+  if (!content) return null;
+  return {
+    content,
+    ...(todos.length > 0 ? { todos } : {}),
+  };
+}
+
+function resolveProjectIdFromRunningRunContext(ctx: DaemonContext, agentName: string): string | undefined {
+  const run = ctx.db.getCurrentRunningAgentRun(agentName);
+  if (!run) return undefined;
+
+  let resolved: string | undefined;
+  for (const envelopeId of run.envelopeIds) {
+    const envelope = ctx.db.getEnvelopeById(envelopeId);
+    const projectId = readProjectIdFromEnvelopeMetadata(envelope?.metadata);
+    if (!projectId) continue;
+    if (!resolved) {
+      resolved = projectId;
+      continue;
+    }
+    if (resolved !== projectId) {
+      rpcError(RPC_ERRORS.INVALID_PARAMS, "Conflicting project context detected in current running run");
+    }
+  }
+
+  return resolved;
+}
+
+function resolveTaskIdFromRunningRunContext(ctx: DaemonContext, agentName: string): string | undefined {
+  const run = ctx.db.getCurrentRunningAgentRun(agentName);
+  if (!run) return undefined;
+
+  let resolved: string | undefined;
+  for (const envelopeId of run.envelopeIds) {
+    const envelope = ctx.db.getEnvelopeById(envelopeId);
+    const taskId = readTaskIdFromEnvelopeMetadata(envelope?.metadata);
+    if (!taskId) continue;
+    if (!resolved) {
+      resolved = taskId;
+      continue;
+    }
+    if (resolved !== taskId) {
+      rpcError(RPC_ERRORS.INVALID_PARAMS, "Conflicting task context detected in current running run");
+    }
+  }
+
+  return resolved;
+}
+
 /**
  * Create envelope RPC handlers.
  */
@@ -119,12 +204,13 @@ export function createEnvelopeHandlers(ctx: DaemonContext): RpcMethodRegistry {
 
     const toInput = p.to.trim();
 
-    let destination: ReturnType<typeof parseAddress>;
-    try {
-      destination = parseAddress(toInput);
-    } catch (err) {
-      rpcError(RPC_ERRORS.INVALID_PARAMS, err instanceof Error ? err.message : "Invalid to");
-    }
+    const destination = (() => {
+      try {
+        return parseAddress(toInput);
+      } catch (err) {
+        rpcError(RPC_ERRORS.INVALID_PARAMS, err instanceof Error ? err.message : "Invalid to");
+      }
+    })();
 
     let from: string;
     let fromBoss = false;
@@ -260,6 +346,9 @@ export function createEnvelopeHandlers(ctx: DaemonContext): RpcMethodRegistry {
     const replyWorkItemFields = replyToEnvelope
       ? extractWorkItemEnvelopeFields(replyToEnvelope.metadata)
       : {};
+    let effectiveTaskId = replyToEnvelope
+      ? readTaskIdFromEnvelopeMetadata(replyToEnvelope.metadata as Record<string, unknown> | undefined)
+      : undefined;
     const projectRootHint = parseProjectRootHint(p.text);
     const capabilityHint = parseCapabilityHint(p.text);
     const capabilityList = parseCapabilityList(capabilityHint);
@@ -273,7 +362,7 @@ export function createEnvelopeHandlers(ctx: DaemonContext): RpcMethodRegistry {
     if (!effectiveProjectRoot && getSenderRole() === "leader") {
       effectiveProjectRoot = senderWorkspace;
     }
-    const effectiveProjectId = existingWorkItem?.projectId ??
+    let effectiveProjectId = existingWorkItem?.projectId ??
       (effectiveProjectRoot ? deriveProjectIdFromRoot(effectiveProjectRoot) : undefined);
     let effectiveOrchestratorAgent = existingWorkItem?.orchestratorAgent;
     if (!effectiveOrchestratorAgent && !existingWorkItem) {
@@ -491,6 +580,69 @@ export function createEnvelopeHandlers(ctx: DaemonContext): RpcMethodRegistry {
       }
     }
 
+    const projectIdFromRunContext = resolveProjectIdFromRunningRunContext(ctx, agent.name);
+    const taskIdFromRunContext = resolveTaskIdFromRunningRunContext(ctx, agent.name);
+    if (projectIdFromRunContext && effectiveProjectId && projectIdFromRunContext !== effectiveProjectId) {
+      const hasExplicitProjectInference = Boolean(
+        workItemFields.workItemId || existingWorkItem?.projectId || existingWorkItem?.projectRoot || projectRootHint
+      );
+      if (hasExplicitProjectInference) {
+        rpcError(
+          RPC_ERRORS.INVALID_PARAMS,
+          "Conflicting project context between running run and work-item inference"
+        );
+      }
+      effectiveProjectId = undefined;
+    }
+    if (taskIdFromRunContext && effectiveTaskId && taskIdFromRunContext !== effectiveTaskId) {
+      rpcError(
+        RPC_ERRORS.INVALID_PARAMS,
+        "Conflicting task context between running run and reply-to inheritance"
+      );
+    }
+    if (projectIdFromRunContext) {
+      effectiveProjectId = projectIdFromRunContext;
+      metadata.projectId = projectIdFromRunContext;
+    }
+    if (taskIdFromRunContext) {
+      effectiveTaskId = taskIdFromRunContext;
+      metadata.taskId = taskIdFromRunContext;
+    } else if (effectiveTaskId) {
+      metadata.taskId = effectiveTaskId;
+    }
+    const inProjectScopedRunContext = Boolean(projectIdFromRunContext);
+
+    if (effectiveTaskId && destination.type === "agent" && getSenderRole() === "speaker") {
+      const destinationAgent =
+        destination.agentName.toLowerCase() === BACKGROUND_AGENT_NAME
+          ? null
+          : ctx.db.getAgentByNameCaseInsensitive(destination.agentName);
+      if (destinationAgent && parseAgentRoleFromMetadata(destinationAgent.metadata) === "leader") {
+        const task = ctx.db.getProjectTaskById(effectiveTaskId);
+        if (task && task.state === "planning") {
+          ctx.db.updateProjectTaskState({
+            taskId: task.id,
+            state: "dispatched",
+            actor: agent.name,
+            reason: "speaker-dispatch-envelope",
+            assignee: destinationAgent.name,
+          });
+        }
+      }
+    }
+
+    if (effectiveTaskId) {
+      const progress = parseTaskProgressReport(p.text);
+      if (progress) {
+        ctx.db.createTaskProgress({
+          taskId: effectiveTaskId,
+          agentName: agent.name,
+          content: progress.content,
+          ...(progress.todos ? { todos: progress.todos } : {}),
+        });
+      }
+    }
+
     const finalMetadata = Object.keys(metadata).length > 0 ? metadata : undefined;
 
     if (workItemFields.workItemId) {
@@ -516,7 +668,7 @@ export function createEnvelopeHandlers(ctx: DaemonContext): RpcMethodRegistry {
           mainGroupChannel: effectiveMainGroupChannel,
         });
 
-        if (effectiveOrchestratorAgent !== agent.name && getSenderRole() === "leader") {
+        if (!inProjectScopedRunContext && effectiveOrchestratorAgent !== agent.name && getSenderRole() === "leader") {
           ctx.db.upsertProjectLeader({
             projectId: effectiveProjectId,
             agentName: agent.name,
@@ -539,7 +691,7 @@ export function createEnvelopeHandlers(ctx: DaemonContext): RpcMethodRegistry {
             assignedBy: agent.name,
           });
 
-          if (effectiveProjectId) {
+          if (effectiveProjectId && !inProjectScopedRunContext) {
             ctx.db.upsertProjectLeader({
               projectId: effectiveProjectId,
               agentName: destinationAgent.name,
@@ -724,8 +876,9 @@ export function createEnvelopeHandlers(ctx: DaemonContext): RpcMethodRegistry {
 
     const totalCount = chain.length;
     const truncated = totalCount > maxDepth;
-    const envelopes = truncated
-      ? [...chain.slice(0, maxDepth - 1), chain[totalCount - 1]!]
+    const lastEnvelope = chain[totalCount - 1];
+    const envelopes = truncated && lastEnvelope
+      ? [...chain.slice(0, maxDepth - 1), lastEnvelope]
       : chain;
     const truncatedIntermediateCount = truncated ? totalCount - maxDepth : 0;
 
