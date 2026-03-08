@@ -12,6 +12,7 @@ import { requireBossToken } from "../middleware/auth.js";
 import type { DaemonContext } from "../../daemon/rpc/context.js";
 import { formatAgentAddress } from "../../adapters/types.js";
 import type { Envelope } from "../../envelope/types.js";
+import { validateDirectChatTarget } from "../direct-chat-policy.js";
 
 /** Virtual address for boss messages sent via the web UI. */
 export const WEB_BOSS_ADDRESS = "channel:web:boss";
@@ -36,6 +37,12 @@ export function createEnvelopeHandlers(daemon: DaemonContext): Record<string, Ro
     const agent = daemon.db.getAgentByNameCaseInsensitive(agentName);
     if (!agent) {
       sendJson(ctx.res, 404, { error: "Agent not found" });
+      return;
+    }
+
+    const validationError = validateDirectChatTarget(daemon.db, agent);
+    if (validationError) {
+      sendJson(ctx.res, 400, { error: validationError });
       return;
     }
 
@@ -77,6 +84,12 @@ export function createEnvelopeHandlers(daemon: DaemonContext): Record<string, Ro
     const agent = daemon.db.getAgentByNameCaseInsensitive(agentName);
     if (!agent) {
       sendJson(ctx.res, 404, { error: "Agent not found" });
+      return;
+    }
+
+    const validationError = validateDirectChatTarget(daemon.db, agent);
+    if (validationError) {
+      sendJson(ctx.res, 400, { error: validationError });
       return;
     }
 

@@ -20,8 +20,10 @@ import type { Server as HttpServer } from "node:http";
 import type { DaemonContext } from "../../daemon/rpc/context.js";
 import { formatAgentAddress } from "../../adapters/types.js";
 import { WEB_BOSS_ADDRESS } from "../handlers/envelopes.js";
+import { validateDirectChatTarget } from "../direct-chat-policy.js";
 import { logEvent } from "../../shared/daemon-log.js";
 import type { Envelope } from "../../envelope/types.js";
+import { resolveSessionRefreshTargetForAgent } from "../../agent/executor.js";
 
 interface WsClient {
   ws: WebSocket;
@@ -34,6 +36,60 @@ interface WsClientMessage {
   token?: string;
   agentName?: string;
   text?: string;
+}
+
+function parseProjectIdFromSessionTarget(agentName: string, sessionTarget: string): string | undefined {
+  const prefix = `${agentName}:`;
+  if (!sessionTarget.startsWith(prefix)) return undefined;
+  const projectId = sessionTarget.slice(prefix.length).trim();
+  return projectId.length > 0 ? projectId : undefined;
+}
+
+export interface AgentWsStatusPayload {
+  agentState: "running" | "idle";
+  agentHealth: "ok" | "error" | "unknown";
+  pendingCount: number;
+  currentRun?: {
+    id: string;
+    startedAt: number;
+    sessionTarget?: string;
+    projectId?: string;
+  };
+}
+
+export function buildAgentWsStatus(params: {
+  daemon: DaemonContext;
+  agentName: string;
+}): AgentWsStatusPayload | null {
+  const agent = params.daemon.db.getAgentByNameCaseInsensitive(params.agentName);
+  if (!agent) return null;
+
+  const isBusy = params.daemon.executor.isAgentBusy(agent.name);
+  const pendingCount = params.daemon.db.countDuePendingEnvelopesForAgent(agent.name);
+  const lastRun = params.daemon.db.getLastFinishedAgentRun(agent.name);
+  const currentRun = isBusy ? params.daemon.db.getCurrentRunningAgentRun(agent.name) : null;
+  const sessionTarget = currentRun
+    ? resolveSessionRefreshTargetForAgent({ db: params.daemon.db, agentName: agent.name })
+    : undefined;
+  const projectId = sessionTarget
+    ? parseProjectIdFromSessionTarget(agent.name, sessionTarget)
+    : undefined;
+
+  return {
+    agentState: isBusy ? "running" : "idle",
+    agentHealth: !lastRun ? "unknown" : lastRun.status === "failed" ? "error" : "ok",
+    pendingCount,
+    ...(currentRun
+      ? {
+        currentRun: {
+          id: currentRun.id,
+          startedAt: currentRun.startedAt,
+          ...(sessionTarget ? { sessionTarget } : {}),
+          ...(projectId ? { projectId } : {}),
+        },
+      }
+      : {}),
+  };
 }
 
 export class ChatWebSocket {
@@ -133,24 +189,17 @@ export class ChatWebSocket {
    * Broadcast agent status update.
    */
   broadcastAgentStatus(agentName: string): void {
-    const agent = this.daemon.db.getAgentByNameCaseInsensitive(agentName);
-    if (!agent) return;
-
-    const isBusy = this.daemon.executor.isAgentBusy(agent.name);
-    const pendingCount = this.daemon.db.countDuePendingEnvelopesForAgent(agent.name);
-    const lastRun = this.daemon.db.getLastFinishedAgentRun(agent.name);
-
-    const status = {
-      agentState: isBusy ? "running" : "idle",
-      agentHealth: !lastRun ? "unknown" : lastRun.status === "failed" ? "error" : "ok",
-      pendingCount,
-    };
+    const status = buildAgentWsStatus({
+      daemon: this.daemon,
+      agentName,
+    });
+    if (!status) return;
 
     for (const client of this.clients) {
-      if (client.authenticated && client.subscriptions.has(agent.name)) {
+      if (client.authenticated && client.subscriptions.has(agentName)) {
         this.send(client, {
           type: "agent-status",
-          agentName: agent.name,
+          agentName,
           status,
         });
       }
@@ -172,7 +221,10 @@ export class ChatWebSocket {
         this.handleUnsubscribe(client, msg.agentName ?? "");
         break;
       default:
-        this.send(client, { type: "error", message: `Unknown message type: ${(msg as any).type}` });
+        this.send(client, {
+          type: "error",
+          message: `Unknown message type: ${String((msg as { type?: unknown }).type ?? "")}`,
+        });
     }
   }
 
@@ -214,6 +266,12 @@ export class ChatWebSocket {
     const agent = this.daemon.db.getAgentByNameCaseInsensitive(agentName.trim());
     if (!agent) {
       this.send(client, { type: "error", message: "Agent not found" });
+      return;
+    }
+
+    const validationError = validateDirectChatTarget(this.daemon.db, agent);
+    if (validationError) {
+      this.send(client, { type: "error", message: validationError });
       return;
     }
 

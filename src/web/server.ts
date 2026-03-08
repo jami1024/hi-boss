@@ -15,6 +15,8 @@ import { createStaticHandler } from "./middleware/static.js";
 import { createStatusHandlers } from "./handlers/status.js";
 import { createAgentHandlers } from "./handlers/agents.js";
 import { createEnvelopeHandlers } from "./handlers/envelopes.js";
+import { createProjectSkillHandlers } from "./handlers/project-skills.js";
+import { createProjectMemoryHandlers } from "./handlers/project-memory.js";
 import { createProjectHandlers } from "./handlers/projects.js";
 import { createPromptHandlers } from "./handlers/prompts.js";
 import { createConfigHandlers } from "./handlers/config.js";
@@ -78,6 +80,10 @@ export class WebServer {
     this.router.delete(`${api}/agents/:name`, agentHandlers.deleteAgent);
     this.router.post(`${api}/agents/:name/refresh`, agentHandlers.refreshAgent);
     this.router.post(`${api}/agents/:name/abort`, agentHandlers.abortAgent);
+    this.router.get(`${api}/agents/:name/skills/remote`, agentHandlers.listRemoteSkills);
+    this.router.post(`${api}/agents/:name/skills/remote`, agentHandlers.addRemoteSkill);
+    this.router.post(`${api}/agents/:name/skills/remote/:skillName/update`, agentHandlers.updateRemoteSkill);
+    this.router.delete(`${api}/agents/:name/skills/remote/:skillName`, agentHandlers.removeRemoteSkill);
 
     // Chat / Envelopes
     const envelopeHandlers = createEnvelopeHandlers(this.daemon);
@@ -86,12 +92,37 @@ export class WebServer {
 
     // Projects
     const projectHandlers = createProjectHandlers(this.daemon);
+    const projectSkillHandlers = createProjectSkillHandlers(this.daemon);
+    const projectMemoryHandlers = createProjectMemoryHandlers(this.daemon);
     this.router.get(`${api}/projects`, projectHandlers.listProjects);
+    this.router.post(`${api}/projects`, projectHandlers.createProject);
     this.router.get(`${api}/projects/:id`, projectHandlers.getProject);
     this.router.put(`${api}/projects/:id`, projectHandlers.updateProject);
     this.router.post(`${api}/projects/:id/leaders`, projectHandlers.upsertLeader);
     this.router.put(`${api}/projects/:id/leaders/:agentName`, projectHandlers.updateLeader);
     this.router.post(`${api}/projects/:id/select-leader`, projectHandlers.selectLeader);
+    this.router.post(`${api}/projects/:id/chat/send`, projectHandlers.sendProjectChatMessage);
+    this.router.get(`${api}/projects/:id/chat/messages`, projectHandlers.listProjectChatMessages);
+    this.router.post(`${api}/projects/:id/tasks`, projectHandlers.createProjectTask);
+    this.router.get(`${api}/projects/:id/tasks`, projectHandlers.listProjectTasks);
+    this.router.get(`${api}/projects/:id/tasks/:taskId`, projectHandlers.getProjectTask);
+    this.router.post(`${api}/projects/:id/tasks/:taskId/state`, projectHandlers.updateProjectTaskState);
+    this.router.post(`${api}/projects/:id/tasks/:taskId/cancel`, projectHandlers.cancelProjectTask);
+    this.router.post(`${api}/projects/:id/tasks/:taskId/progress`, projectHandlers.appendTaskProgress);
+    this.router.get(`${api}/projects/:id/skills/remote`, projectSkillHandlers.listRemoteSkills);
+    this.router.post(`${api}/projects/:id/skills/remote`, projectSkillHandlers.addRemoteSkill);
+    this.router.post(
+      `${api}/projects/:id/skills/remote/:skillName/update`,
+      projectSkillHandlers.updateRemoteSkill
+    );
+    this.router.delete(
+      `${api}/projects/:id/skills/remote/:skillName`,
+      projectSkillHandlers.removeRemoteSkill
+    );
+    this.router.get(`${api}/projects/:id/memory`, projectMemoryHandlers.listMemory);
+    this.router.get(`${api}/projects/:id/memory/:entryName`, projectMemoryHandlers.getMemoryEntry);
+    this.router.put(`${api}/projects/:id/memory/:entryName`, projectMemoryHandlers.upsertMemoryEntry);
+    this.router.delete(`${api}/projects/:id/memory/:entryName`, projectMemoryHandlers.deleteMemoryEntry);
 
     // Health check (no auth required)
     this.router.get(`${api}/ping`, async (ctx) => {
