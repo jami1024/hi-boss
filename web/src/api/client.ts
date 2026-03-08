@@ -4,6 +4,20 @@
 
 const API_BASE = "/api/v1";
 
+export class ApiError extends Error {
+  readonly status: number;
+  readonly errorCode?: string;
+  readonly hint?: string;
+
+  constructor(params: { message: string; status: number; errorCode?: string; hint?: string }) {
+    super(params.message);
+    this.name = "ApiError";
+    this.status = params.status;
+    this.errorCode = params.errorCode;
+    this.hint = params.hint;
+  }
+}
+
 function getToken(): string {
   return localStorage.getItem("hiboss_token") ?? "";
 }
@@ -44,10 +58,22 @@ async function request<T>(
     throw new Error("Unauthorized");
   }
 
-  const data = await res.json();
+  const data = (await res.json().catch(() => ({}))) as unknown;
 
   if (!res.ok) {
-    throw new Error(data.error ?? `Request failed: ${res.status}`);
+    const payload =
+      data && typeof data === "object"
+        ? (data as Record<string, unknown>)
+        : {};
+    throw new ApiError({
+      message:
+        typeof payload.error === "string" && payload.error.trim().length > 0
+          ? payload.error
+          : `Request failed: ${res.status}`,
+      status: res.status,
+      errorCode: typeof payload.errorCode === "string" ? payload.errorCode : undefined,
+      hint: typeof payload.hint === "string" ? payload.hint : undefined,
+    });
   }
 
   return data as T;
@@ -80,7 +106,12 @@ export interface AgentStatus {
   agentState: "running" | "idle";
   agentHealth: "ok" | "error" | "unknown";
   pendingCount: number;
-  currentRun: { id: string; startedAt: number } | null;
+  currentRun: {
+    id: string;
+    startedAt: number;
+    sessionTarget?: string;
+    projectId?: string;
+  } | null;
   lastRun: {
     id: string;
     startedAt: number;
@@ -124,12 +155,40 @@ export interface AgentSetResult {
   bindings: string[];
 }
 
+export interface RemoteSkillRecord {
+  skillName: string;
+  sourceUrl: string;
+  repositoryUrl: string;
+  sourcePath: string;
+  sourceRef: string;
+  commit: string;
+  checksum: string;
+  fileCount: number;
+  status: "valid" | "error";
+  addedAt: string;
+  lastUpdated: string;
+  targetType: "agent" | "project";
+  targetId: string;
+}
+
+export interface RemoteSkillRefreshRequest {
+  agentName: string;
+  scope: "agent" | "project";
+  projectId?: string;
+}
+
+export interface RemoteSkillRefreshSummary {
+  count: number;
+  requested: RemoteSkillRefreshRequest[];
+}
+
 // ==================== Project Types ====================
 
 export interface ProjectLeaderInfo {
   projectId: string;
   agentName: string;
   capabilities: string[];
+  allowDispatchTo?: string[];
   active: boolean;
   updatedAt: number;
 }
@@ -143,6 +202,72 @@ export interface ProjectSummary {
   createdAt: number;
   updatedAt?: number;
   leaders?: ProjectLeaderInfo[];
+}
+
+export interface ProjectChatMessage {
+  id: string;
+  from: string;
+  to: string;
+  fromBoss: boolean;
+  text: string;
+  status: string;
+  createdAt: number;
+}
+
+export interface ProjectChatContext {
+  id: string;
+  name: string;
+  root: string;
+  speakerAgent: string;
+  availableLeaders: string[];
+}
+
+export type ProjectTaskState =
+  | "created"
+  | "planning"
+  | "dispatched"
+  | "executing"
+  | "completed"
+  | "cancelled";
+
+export type ProjectTaskPriority = "low" | "normal" | "high" | "critical";
+
+export interface ProjectTaskFlowEntry {
+  fromState?: ProjectTaskState;
+  toState: ProjectTaskState;
+  actor?: string;
+  reason?: string;
+  at: number;
+}
+
+export interface ProjectTask {
+  id: string;
+  projectId: string;
+  title: string;
+  state: ProjectTaskState;
+  priority: ProjectTaskPriority;
+  assignee?: string;
+  output?: string;
+  flowLog: ProjectTaskFlowEntry[];
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number;
+}
+
+export interface ProjectTaskProgress {
+  id: string;
+  taskId: string;
+  agentName: string;
+  content: string;
+  todos?: string[];
+  createdAt: number;
+}
+
+export interface ProjectMemoryEntry {
+  name: string;
+  size: number;
+  updatedAt: number;
+  content?: string;
 }
 
 export interface ProjectUpdateParams {
@@ -232,6 +357,12 @@ export interface DaemonStatus {
     state: "running" | "idle";
     health: "ok" | "error" | "unknown";
     pendingCount: number;
+    currentRun?: {
+      id: string;
+      startedAt: number;
+      sessionTarget?: string;
+      projectId?: string;
+    };
   }>;
 }
 
@@ -260,8 +391,12 @@ export const api = {
   deleteAgent: (name: string) =>
     request<{ success: boolean; agentName: string }>("DELETE", `/agents/${encodeURIComponent(name)}`),
 
-  refreshAgent: (name: string) =>
-    request<{ success: boolean; agentName: string }>("POST", `/agents/${encodeURIComponent(name)}/refresh`),
+  refreshAgent: (name: string, opts?: { projectId?: string }) =>
+    request<{ success: boolean; agentName: string }>(
+      "POST",
+      `/agents/${encodeURIComponent(name)}/refresh`,
+      opts?.projectId ? { projectId: opts.projectId } : undefined
+    ),
 
   abortAgent: (name: string) =>
     request<{
@@ -270,6 +405,49 @@ export const api = {
       cancelledRun: boolean;
       clearedPendingCount: number;
     }>("POST", `/agents/${encodeURIComponent(name)}/abort`),
+
+  listAgentRemoteSkills: (name: string) =>
+    request<{
+      targetType: "agent" | "project";
+      targetId: string;
+      skills: RemoteSkillRecord[];
+    }>("GET", `/agents/${encodeURIComponent(name)}/skills/remote`),
+
+  addAgentRemoteSkill: (
+    name: string,
+    body: { skillName: string; sourceUrl: string; ref?: string }
+  ) =>
+    request<{
+      targetType: "agent" | "project";
+      targetId: string;
+      skill: RemoteSkillRecord;
+      refresh: RemoteSkillRefreshSummary;
+    }>("POST", `/agents/${encodeURIComponent(name)}/skills/remote`, body),
+
+  updateAgentRemoteSkill: (
+    name: string,
+    skillName: string,
+    body?: { sourceUrl?: string; ref?: string }
+  ) =>
+    request<{
+      targetType: "agent" | "project";
+      targetId: string;
+      skill: RemoteSkillRecord;
+      refresh: RemoteSkillRefreshSummary;
+    }>(
+      "POST",
+      `/agents/${encodeURIComponent(name)}/skills/remote/${encodeURIComponent(skillName)}/update`,
+      body
+    ),
+
+  removeAgentRemoteSkill: (name: string, skillName: string) =>
+    request<{
+      success: boolean;
+      targetType: "agent" | "project";
+      targetId: string;
+      skillName: string;
+      refresh: RemoteSkillRefreshSummary;
+    }>("DELETE", `/agents/${encodeURIComponent(name)}/skills/remote/${encodeURIComponent(skillName)}`),
 
   // Chat
   sendChatMessage: (agentName: string, text: string) =>
@@ -318,6 +496,14 @@ export const api = {
       body,
     ),
 
+  createProject: (body: {
+    name: string;
+    root: string;
+    speakerAgent: string;
+    mainGroupChannel?: string;
+  }) =>
+    request<{ project: ProjectSummary }>("POST", "/projects", body),
+
   updateProjectLeader: (projectId: string, agentName: string, body: {
     capabilities?: string[];
     active?: boolean;
@@ -327,6 +513,168 @@ export const api = {
       `/projects/${encodeURIComponent(projectId)}/leaders/${encodeURIComponent(agentName)}`,
       body,
     ),
+
+  sendProjectChatMessage: (projectId: string, text: string) =>
+    request<{ id: string }>("POST", `/projects/${encodeURIComponent(projectId)}/chat/send`, { text }),
+
+  getProjectChatMessages: (projectId: string, opts?: { limit?: number; before?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.before) params.set("before", String(opts.before));
+    const qs = params.toString();
+    return request<{
+      project: ProjectChatContext;
+      messages: ProjectChatMessage[];
+    }>(
+      "GET",
+      `/projects/${encodeURIComponent(projectId)}/chat/messages${qs ? `?${qs}` : ""}`
+    );
+  },
+
+  createProjectTask: (
+    projectId: string,
+    body: {
+      title: string;
+      text?: string;
+      priority?: ProjectTaskPriority;
+      autoDispatch?: boolean;
+    }
+  ) =>
+    request<{ task: ProjectTask; envelopeId?: string }>(
+      "POST",
+      `/projects/${encodeURIComponent(projectId)}/tasks`,
+      body
+    ),
+
+  listProjectTasks: (projectId: string, opts?: { limit?: number; state?: ProjectTaskState }) => {
+    const params = new URLSearchParams();
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.state) params.set("state", opts.state);
+    const qs = params.toString();
+    return request<{ tasks: ProjectTask[] }>(
+      "GET",
+      `/projects/${encodeURIComponent(projectId)}/tasks${qs ? `?${qs}` : ""}`
+    );
+  },
+
+  getProjectTask: (projectId: string, taskId: string) =>
+    request<{
+      task: ProjectTask;
+      progress: ProjectTaskProgress[];
+      envelopes: Array<{ id: string; from: string; to: string; text: string; status: string; createdAt: number }>;
+    }>(
+      "GET",
+      `/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}`
+    ),
+
+  updateProjectTaskState: (
+    projectId: string,
+    taskId: string,
+    body: {
+      state: ProjectTaskState;
+      assignee?: string;
+      reason?: string;
+      output?: string | null;
+      dispatchText?: string;
+    }
+  ) =>
+    request<{ task: ProjectTask; envelopeId?: string; completionEnvelopeId?: string }>(
+      "POST",
+      `/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/state`,
+      body
+    ),
+
+  cancelProjectTask: (
+    projectId: string,
+    taskId: string,
+    body?: { reason?: string; force?: boolean }
+  ) =>
+    request<{
+      task: ProjectTask;
+      cancelledRun: boolean;
+      clearedPendingCount: number;
+    }>(
+      "POST",
+      `/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/cancel`,
+      body
+    ),
+
+  appendProjectTaskProgress: (
+    projectId: string,
+    taskId: string,
+    body: { agentName: string; content: string; todos?: string[] }
+  ) =>
+    request<{ progress: ProjectTaskProgress }>(
+      "POST",
+      `/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(taskId)}/progress`,
+      body
+    ),
+
+  listProjectRemoteSkills: (projectId: string) =>
+    request<{
+      targetType: "agent" | "project";
+      targetId: string;
+      skills: RemoteSkillRecord[];
+    }>("GET", `/projects/${encodeURIComponent(projectId)}/skills/remote`),
+
+  addProjectRemoteSkill: (
+    projectId: string,
+    body: { skillName: string; sourceUrl: string; ref?: string }
+  ) =>
+    request<{
+      targetType: "agent" | "project";
+      targetId: string;
+      skill: RemoteSkillRecord;
+      refresh: RemoteSkillRefreshSummary;
+    }>("POST", `/projects/${encodeURIComponent(projectId)}/skills/remote`, body),
+
+  updateProjectRemoteSkill: (
+    projectId: string,
+    skillName: string,
+    body?: { sourceUrl?: string; ref?: string }
+  ) =>
+    request<{
+      targetType: "agent" | "project";
+      targetId: string;
+      skill: RemoteSkillRecord;
+      refresh: RemoteSkillRefreshSummary;
+    }>(
+      "POST",
+      `/projects/${encodeURIComponent(projectId)}/skills/remote/${encodeURIComponent(skillName)}/update`,
+      body
+    ),
+
+  removeProjectRemoteSkill: (projectId: string, skillName: string) =>
+    request<{
+      success: boolean;
+      targetType: "agent" | "project";
+      targetId: string;
+      skillName: string;
+      refresh: RemoteSkillRefreshSummary;
+    }>("DELETE", `/projects/${encodeURIComponent(projectId)}/skills/remote/${encodeURIComponent(skillName)}`),
+
+  listProjectMemoryEntries: (projectId: string) =>
+    request<{ entries: ProjectMemoryEntry[] }>("GET", `/projects/${encodeURIComponent(projectId)}/memory`),
+
+  getProjectMemoryEntry: (projectId: string, entryName: string) =>
+    request<{ entry: ProjectMemoryEntry }>(
+      "GET",
+      `/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(entryName)}`
+    ),
+
+  upsertProjectMemoryEntry: (projectId: string, entryName: string, content: string) =>
+    request<{ entry: ProjectMemoryEntry; refresh: RemoteSkillRefreshSummary }>(
+      "PUT",
+      `/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(entryName)}`,
+      { content }
+    ),
+
+  deleteProjectMemoryEntry: (projectId: string, entryName: string) =>
+    request<{
+      success: boolean;
+      entryName: string;
+      refresh: RemoteSkillRefreshSummary;
+    }>("DELETE", `/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(entryName)}`),
 
   // Prompts
   listPrompts: () =>

@@ -1,10 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { api, type AgentSummary } from "@/api/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { ConnectionStatus } from "@/components/ConnectionStatus";
+import { useDaemonStatusFeed } from "@/hooks/useDaemonStatusFeed";
 
 function healthColor(health: string): string {
   switch (health) {
@@ -29,38 +32,65 @@ const cardVariants = {
   }),
 };
 
+interface AgentCardStatus {
+  state: string;
+  health: string;
+  pending: number;
+  currentRunId?: string;
+  sessionTarget?: string;
+  projectId?: string;
+}
+
 export function AgentsPage() {
   const [agents, setAgents] = useState<AgentSummary[]>([]);
-  const [statuses, setStatuses] = useState<Record<string, { state: string; health: string; pending: number }>>({});
   const [filter, setFilter] = useState("");
-  const [error, setError] = useState("");
+  const [agentsError, setAgentsError] = useState("");
+  const [boundSpeakerNames, setBoundSpeakerNames] = useState<string[]>([]);
   const navigate = useNavigate();
+
+  const boundSpeakerNameSet = useMemo(() => new Set(boundSpeakerNames), [boundSpeakerNames]);
+
+  const subscribedAgentNames = useMemo(
+    () => agents.map((agent) => agent.name),
+    [agents]
+  );
+
+  const { status: daemonStatus, error: statusError, connected, authenticated } = useDaemonStatusFeed({
+    pollMs: 10000,
+    agentNamesOverride: subscribedAgentNames,
+  });
+
+  const statuses = useMemo<Record<string, AgentCardStatus>>(() => {
+    const statusMap: Record<string, AgentCardStatus> = {};
+    for (const entry of daemonStatus?.agents ?? []) {
+      statusMap[entry.name] = {
+        state: entry.state,
+        health: entry.health,
+        pending: entry.pendingCount,
+        ...(entry.currentRun?.id ? { currentRunId: entry.currentRun.id } : {}),
+        ...(entry.currentRun?.sessionTarget
+          ? { sessionTarget: entry.currentRun.sessionTarget }
+          : {}),
+        ...(entry.currentRun?.projectId ? { projectId: entry.currentRun.projectId } : {}),
+      };
+    }
+    return statusMap;
+  }, [daemonStatus]);
+
+  const error = agentsError || statusError;
 
   useEffect(() => {
     const load = async () => {
       try {
-        const { agents: list } = await api.listAgents();
+        const [{ agents: list }, { projects }] = await Promise.all([
+          api.listAgents(),
+          api.listProjects({ limit: 500 }),
+        ]);
         setAgents(list);
-
-        // Fetch status for each agent
-        const statusMap: typeof statuses = {};
-        await Promise.all(
-          list.map(async (agent) => {
-            try {
-              const detail = await api.getAgentStatus(agent.name);
-              statusMap[agent.name] = {
-                state: detail.status.agentState,
-                health: detail.status.agentHealth,
-                pending: detail.status.pendingCount,
-              };
-            } catch {
-              statusMap[agent.name] = { state: "idle", health: "unknown", pending: 0 };
-            }
-          })
-        );
-        setStatuses(statusMap);
+        setBoundSpeakerNames(projects.map((project) => project.speakerAgent));
+        setAgentsError("");
       } catch (err) {
-        setError((err as Error).message);
+        setAgentsError((err as Error).message);
       }
     };
     load();
@@ -98,6 +128,7 @@ export function AgentsPage() {
             className="w-64"
           />
           <Badge variant="outline">{agents.length} total</Badge>
+          <ConnectionStatus connected={connected} authenticated={authenticated} size="compact" />
         </div>
       </div>
 
@@ -108,6 +139,7 @@ export function AgentsPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {filtered.map((agent, i) => {
           const st = statuses[agent.name];
+          const canDirectChat = agent.role === "speaker" && !boundSpeakerNameSet.has(agent.name);
           return (
             <motion.div
               key={agent.name}
@@ -164,6 +196,24 @@ export function AgentsPage() {
                         {st?.state ?? "unknown"}
                       </Badge>
                     </div>
+                    {st?.currentRunId && (
+                      <div className="flex justify-between">
+                        <span>Current Run</span>
+                        <span className="font-mono text-xs text-foreground">{st.currentRunId.slice(0, 8)}</span>
+                      </div>
+                    )}
+                    {st?.sessionTarget && (
+                      <div className="flex justify-between">
+                        <span>Session Target</span>
+                        <span className="font-mono text-xs text-foreground">{st.sessionTarget}</span>
+                      </div>
+                    )}
+                    {st?.projectId && (
+                      <div className="flex justify-between">
+                        <span>Project</span>
+                        <span className="font-mono text-xs text-foreground">{st.projectId}</span>
+                      </div>
+                    )}
                     {agent.bindings.length > 0 && (
                       <div className="flex justify-between">
                         <span>Adapters</span>
@@ -178,6 +228,20 @@ export function AgentsPage() {
                         <Badge variant="outline" className="text-xs">
                           {st?.pending}
                         </Badge>
+                      </div>
+                    )}
+                    {canDirectChat && (
+                      <div className="pt-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/agents/${encodeURIComponent(agent.name)}/chat`);
+                          }}
+                        >
+                          Chat
+                        </Button>
                       </div>
                     )}
                   </div>

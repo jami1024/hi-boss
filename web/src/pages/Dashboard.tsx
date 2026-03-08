@@ -1,26 +1,8 @@
-import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { api } from "@/api/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-
-interface DaemonStatus {
-  running: boolean;
-  startTimeMs: number | null;
-  uptime: number | null;
-  bossName: string | null;
-  bossTimezone: string;
-  agentCount: number;
-  bindingCount: number;
-  agents: Array<{
-    name: string;
-    role: string | null;
-    provider: string | null;
-    state: "running" | "idle";
-    health: "ok" | "error" | "unknown";
-    pendingCount: number;
-  }>;
-}
+import { ConnectionStatus } from "@/components/ConnectionStatus";
+import { useDaemonStatusFeed } from "@/hooks/useDaemonStatusFeed";
 
 function formatUptime(ms: number | null): string {
   if (!ms) return "—";
@@ -55,22 +37,7 @@ const cardVariants = {
 };
 
 export function Dashboard() {
-  const [status, setStatus] = useState<DaemonStatus | null>(null);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const data = await api.getStatus();
-        setStatus(data);
-      } catch (err) {
-        setError((err as Error).message);
-      }
-    };
-    load();
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
-  }, []);
+  const { status, error, connected, authenticated } = useDaemonStatusFeed({ pollMs: 5000 });
 
   if (error) {
     return (
@@ -90,7 +57,10 @@ export function Dashboard() {
 
   return (
     <div className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold">Dashboard</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <ConnectionStatus connected={connected} authenticated={authenticated} size="compact" />
+      </div>
 
       {/* Stats row */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -167,6 +137,24 @@ export function Dashboard() {
                         {agent.pendingCount}
                       </span>
                     </div>
+                    {agent.currentRun && (
+                      <div className="flex justify-between">
+                        <span>Current Run</span>
+                        <span className="font-mono text-xs text-foreground">{agent.currentRun.id.slice(0, 8)}</span>
+                      </div>
+                    )}
+                    {agent.currentRun?.sessionTarget && (
+                      <div className="flex justify-between">
+                        <span>Session Target</span>
+                        <span className="font-mono text-xs text-foreground">{agent.currentRun.sessionTarget}</span>
+                      </div>
+                    )}
+                    {agent.currentRun?.projectId && (
+                      <div className="flex justify-between">
+                        <span>Project</span>
+                        <span className="font-mono text-xs text-foreground">{agent.currentRun.projectId}</span>
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>

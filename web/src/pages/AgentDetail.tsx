@@ -6,6 +6,8 @@ import {
   type AgentSummary,
   type AgentStatus,
   type AgentUpdateParams,
+  type ProjectSummary,
+  type RemoteSkillRecord,
   type SessionPolicy,
 } from "@/api/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,6 +35,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { RemoteSkillManager } from "@/components/RemoteSkillManager";
 
 function healthLabel(health: string): string {
   switch (health) {
@@ -64,6 +67,10 @@ export function AgentDetailPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [boundProjects, setBoundProjects] = useState<ProjectSummary[]>([]);
+  const [remoteSkills, setRemoteSkills] = useState<RemoteSkillRecord[]>([]);
+  const [remoteSkillsLoading, setRemoteSkillsLoading] = useState(false);
+  const [remoteSkillsError, setRemoteSkillsError] = useState("");
 
   // Edit form state
   const [description, setDescription] = useState("");
@@ -96,16 +103,62 @@ export function AgentDetailPage() {
           ? String(detail.agent.sessionPolicy.maxContextLength)
           : ""
       );
+
+      if (detail.agent.role === "speaker") {
+        const { projects } = await api.listProjects({ limit: 200 });
+        setBoundProjects(projects.filter((project) => project.speakerAgent === detail.agent.name));
+      } else {
+        setBoundProjects([]);
+      }
     } catch (err) {
       setError((err as Error).message);
     }
   }, [name]);
 
+  const loadRemoteSkills = useCallback(async () => {
+    if (!name) return;
+    setRemoteSkillsLoading(true);
+    setRemoteSkillsError("");
+    try {
+      const result = await api.listAgentRemoteSkills(name);
+      setRemoteSkills(result.skills);
+    } catch (err) {
+      setRemoteSkillsError((err as Error).message);
+    } finally {
+      setRemoteSkillsLoading(false);
+    }
+  }, [name]);
+
   useEffect(() => {
     loadAgent();
+    loadRemoteSkills();
     const interval = setInterval(loadAgent, 10000);
     return () => clearInterval(interval);
-  }, [loadAgent]);
+  }, [loadAgent, loadRemoteSkills]);
+
+  const handleAddRemoteSkill = async (input: { skillName: string; sourceUrl: string; ref?: string }) => {
+    if (!name) return;
+    const result = await api.addAgentRemoteSkill(name, input);
+    await loadRemoteSkills();
+    return { refresh: result.refresh };
+  };
+
+  const handleUpdateRemoteSkill = async (input: { skillName: string; sourceUrl?: string; ref?: string }) => {
+    if (!name) return;
+    const result = await api.updateAgentRemoteSkill(name, input.skillName, {
+      sourceUrl: input.sourceUrl,
+      ref: input.ref,
+    });
+    await loadRemoteSkills();
+    return { refresh: result.refresh };
+  };
+
+  const handleRemoveRemoteSkill = async (skillName: string) => {
+    if (!name) return;
+    const result = await api.removeAgentRemoteSkill(name, skillName);
+    await loadRemoteSkills();
+    return { refresh: result.refresh };
+  };
 
   const handleSave = async () => {
     if (!name) return;
@@ -153,7 +206,7 @@ export function AgentDetailPage() {
         : "";
       if (maxContextLength !== currentMaxCtx) {
         const parsed = parseInt(maxContextLength, 10);
-        if (maxContextLength.trim() && !isNaN(parsed) && parsed > 0) {
+        if (maxContextLength.trim() && !Number.isNaN(parsed) && parsed > 0) {
           newPolicy.maxContextLength = parsed;
         }
         policyChanged = true;
@@ -248,13 +301,15 @@ export function AgentDetailPage() {
           </Badge>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => navigate(`/agents/${encodeURIComponent(agent.name)}/chat`)}
-          >
-            Chat
-          </Button>
+          {agent.role === "speaker" && boundProjects.length === 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => navigate(`/agents/${encodeURIComponent(agent.name)}/chat`)}
+            >
+              Chat
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={handleRefresh}>
             Refresh Session
           </Button>
@@ -360,6 +415,7 @@ export function AgentDetailPage() {
           <TabsTrigger value="general">General</TabsTrigger>
           <TabsTrigger value="provider">Provider</TabsTrigger>
           <TabsTrigger value="session">Session Policy</TabsTrigger>
+          <TabsTrigger value="skills">Remote Skills</TabsTrigger>
           <TabsTrigger value="info">Info</TabsTrigger>
         </TabsList>
 
@@ -494,6 +550,20 @@ export function AgentDetailPage() {
           </Card>
         </TabsContent>
 
+        <TabsContent value="skills" className="space-y-4 mt-4">
+          <RemoteSkillManager
+            title="Agent Remote Skills"
+            description={`Installed under ~/hiboss/agents/${agent.name}/skills`}
+            loading={remoteSkillsLoading}
+            error={remoteSkillsError}
+            skills={remoteSkills}
+            onRefresh={loadRemoteSkills}
+            onAdd={handleAddRemoteSkill}
+            onUpdate={handleUpdateRemoteSkill}
+            onRemove={handleRemoveRemoteSkill}
+          />
+        </TabsContent>
+
         <TabsContent value="info" className="space-y-4 mt-4">
           <Card>
             <CardContent className="pt-6">
@@ -522,6 +592,18 @@ export function AgentDetailPage() {
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Current Run</span>
                     <span className="font-mono text-xs">{status.currentRun.id.slice(0, 8)}</span>
+                  </div>
+                )}
+                {status.currentRun?.sessionTarget && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Current Session Target</span>
+                    <span className="font-mono text-xs">{status.currentRun.sessionTarget}</span>
+                  </div>
+                )}
+                {status.currentRun?.projectId && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Current Project</span>
+                    <span className="font-mono text-xs">{status.currentRun.projectId}</span>
                   </div>
                 )}
               </div>

@@ -1,15 +1,17 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { api } from "@/api/client";
+import { api, type ProjectSummary } from "@/api/client";
 import {
   useWebSocket,
   type ChatMessage,
   type AgentWsStatus,
 } from "@/hooks/useWebSocket";
+import { useDaemonStatusFeed } from "@/hooks/useDaemonStatusFeed";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { ConnectionStatus } from "@/components/ConnectionStatus";
 import { cn } from "@/lib/utils";
 
 function formatTime(ms: number): string {
@@ -56,10 +58,12 @@ export function AgentChatPage() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [agentStatus, setAgentStatus] = useState<AgentWsStatus | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [sending, setSending] = useState(false);
+  const [agentRole, setAgentRole] = useState<string | null>(null);
+  const [boundProjects, setBoundProjects] = useState<ProjectSummary[]>([]);
+  const lastMessageId = messages.length > 0 ? messages[messages.length - 1]?.id : undefined;
 
   // Track message IDs to avoid duplicates
   const messageIdsRef = useRef(new Set<string>());
@@ -81,13 +85,28 @@ export function AgentChatPage() {
     [addMessage]
   );
 
-  const handleStatusUpdate = useCallback((status: AgentWsStatus) => {
-    setAgentStatus(status);
-  }, []);
-
   const handleWsError = useCallback((err: string) => {
     console.warn("WebSocket error:", err);
   }, []);
+
+  const feedAgentNames = useMemo(() => (name ? [name] : []), [name]);
+  const {
+    status: daemonStatus,
+    mergeAgentStatus,
+  } = useDaemonStatusFeed({
+    pollMs: 5000,
+    agentNamesOverride: feedAgentNames,
+    websocketEnabled: false,
+  });
+  const agentStatus = useMemo(
+    () => daemonStatus?.agents.find((agent) => agent.name === name),
+    [daemonStatus, name]
+  );
+
+  const handleStatusUpdate = useCallback((status: AgentWsStatus) => {
+    if (!name) return;
+    mergeAgentStatus(name, status);
+  }, [mergeAgentStatus, name]);
 
   const { connected, authenticated, sendMessage: wsSend } = useWebSocket({
     agentName: name ?? "",
@@ -103,6 +122,27 @@ export function AgentChatPage() {
 
     const load = async () => {
       try {
+        // Check agent role first
+        const detail = await api.getAgentStatus(name);
+        if (cancelled) return;
+        setAgentRole(detail.agent.role);
+        if (detail.agent.role !== "speaker") {
+          setBoundProjects([]);
+          setLoading(false);
+          return;
+        }
+
+        const { projects } = await api.listProjects({ limit: 500 });
+        if (cancelled) return;
+        const nextBoundProjects = projects.filter((project) => project.speakerAgent === detail.agent.name);
+        setBoundProjects(nextBoundProjects);
+        if (nextBoundProjects.length > 0) {
+          messageIdsRef.current.clear();
+          setMessages([]);
+          setLoading(false);
+          return;
+        }
+
         const { messages: msgs } = await api.getChatMessages(name, {
           limit: 100,
         });
@@ -130,11 +170,12 @@ export function AgentChatPage() {
 
   // Auto-scroll to bottom
   useEffect(() => {
+    if (!lastMessageId) return;
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [lastMessageId]);
 
   const handleSend = async () => {
-    if (!name || !input.trim() || sending) return;
+    if (!name || !input.trim() || sending || boundProjects.length > 0) return;
 
     const text = input.trim();
     setInput("");
@@ -184,6 +225,59 @@ export function AgentChatPage() {
     );
   }
 
+  if (!loading && agentRole !== "speaker") {
+    return (
+      <div className="p-6 text-center py-12">
+        <p className="text-muted-foreground">
+          Leader agents cannot be chatted with directly.
+        </p>
+        <p className="text-sm text-muted-foreground mt-1">
+          Only speaker agents support direct chat. Leader agents receive tasks through project orchestration.
+        </p>
+        <Button
+          variant="outline"
+          className="mt-4"
+          onClick={() => navigate(`/agents/${encodeURIComponent(name ?? "")}`)}
+        >
+          Back to Agent
+        </Button>
+      </div>
+    );
+  }
+
+  if (!loading && boundProjects.length > 0) {
+    return (
+      <div className="p-6 text-center py-12 space-y-3">
+        <p className="text-muted-foreground">
+          Speaker <span className="font-semibold">{name}</span> is bound to project chat.
+        </p>
+        <p className="text-sm text-muted-foreground">
+          Open one of the project chat rooms below instead of using direct agent chat.
+        </p>
+        <div className="flex flex-wrap justify-center gap-2 pt-1">
+          {boundProjects.map((project) => (
+            <Button
+              key={project.id}
+              variant="outline"
+              size="sm"
+              onClick={() => navigate(`/projects/${encodeURIComponent(project.id)}/chat`)}
+            >
+              {project.name} ({project.id})
+            </Button>
+          ))}
+        </div>
+        <div>
+          <Button
+            variant="ghost"
+            onClick={() => navigate(`/agents/${encodeURIComponent(name ?? "")}`)}
+          >
+            Back to Agent
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -200,32 +294,19 @@ export function AgentChatPage() {
           {agentStatus && (
             <Badge
               variant={
-                agentStatus.agentState === "running" ? "default" : "secondary"
+                agentStatus.state === "running" ? "default" : "secondary"
               }
             >
-              {agentStatus.agentState}
+              {agentStatus.state}
+            </Badge>
+          )}
+          {agentStatus?.currentRun?.projectId && (
+            <Badge variant="outline" className="font-mono text-[10px]">
+              {agentStatus.currentRun.projectId}
             </Badge>
           )}
         </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span
-            className={cn(
-              "inline-block h-2 w-2 rounded-full",
-              connected && authenticated
-                ? "bg-green-500"
-                : connected
-                  ? "bg-yellow-500"
-                  : "bg-red-500"
-            )}
-          />
-          <span>
-            {connected && authenticated
-              ? "Live"
-              : connected
-                ? "Connecting..."
-                : "Offline"}
-          </span>
-        </div>
+        <ConnectionStatus connected={connected} authenticated={authenticated} />
       </div>
 
       {/* Messages */}

@@ -6,6 +6,7 @@ import {
   type ProjectSummary,
   type ProjectLeaderInfo,
   type AgentSummary,
+  type RemoteSkillRecord,
 } from "@/api/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { RemoteSkillManager } from "@/components/RemoteSkillManager";
 
 function formatTime(ms: number | null | undefined): string {
   if (!ms) return "—";
@@ -35,6 +37,10 @@ export function ProjectDetailPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [refreshingSpeakerSession, setRefreshingSpeakerSession] = useState(false);
+  const [remoteSkills, setRemoteSkills] = useState<RemoteSkillRecord[]>([]);
+  const [remoteSkillsLoading, setRemoteSkillsLoading] = useState(false);
+  const [remoteSkillsError, setRemoteSkillsError] = useState("");
 
   // Edit form state
   const [name, setName] = useState("");
@@ -70,12 +76,51 @@ export function ProjectDetailPage() {
     }
   }, []);
 
+  const loadRemoteSkills = useCallback(async () => {
+    if (!id) return;
+    setRemoteSkillsLoading(true);
+    setRemoteSkillsError("");
+    try {
+      const result = await api.listProjectRemoteSkills(id);
+      setRemoteSkills(result.skills);
+    } catch (err) {
+      setRemoteSkillsError((err as Error).message);
+    } finally {
+      setRemoteSkillsLoading(false);
+    }
+  }, [id]);
+
   useEffect(() => {
     loadProject();
     loadAgents();
+    loadRemoteSkills();
     const interval = setInterval(loadProject, 15000);
     return () => clearInterval(interval);
-  }, [loadProject, loadAgents]);
+  }, [loadProject, loadAgents, loadRemoteSkills]);
+
+  const handleAddRemoteSkill = async (input: { skillName: string; sourceUrl: string; ref?: string }) => {
+    if (!id) return;
+    const result = await api.addProjectRemoteSkill(id, input);
+    await loadRemoteSkills();
+    return { refresh: result.refresh };
+  };
+
+  const handleUpdateRemoteSkill = async (input: { skillName: string; sourceUrl?: string; ref?: string }) => {
+    if (!id) return;
+    const result = await api.updateProjectRemoteSkill(id, input.skillName, {
+      sourceUrl: input.sourceUrl,
+      ref: input.ref,
+    });
+    await loadRemoteSkills();
+    return { refresh: result.refresh };
+  };
+
+  const handleRemoveRemoteSkill = async (skillName: string) => {
+    if (!id) return;
+    const result = await api.removeProjectRemoteSkill(id, skillName);
+    await loadRemoteSkills();
+    return { refresh: result.refresh };
+  };
 
   const handleSave = async () => {
     if (!id || !project) return;
@@ -146,6 +191,20 @@ export function ProjectDetailPage() {
     }
   };
 
+  const handleRefreshSpeakerSession = async () => {
+    if (!project) return;
+    setRefreshingSpeakerSession(true);
+    setSaveError("");
+    try {
+      await api.refreshAgent(project.speakerAgent, { projectId: project.id });
+      await loadProject();
+    } catch (err) {
+      setSaveError((err as Error).message);
+    } finally {
+      setRefreshingSpeakerSession(false);
+    }
+  };
+
   if (error) {
     return (
       <div className="p-6">
@@ -182,6 +241,37 @@ export function ProjectDetailPage() {
           <Badge variant="outline" className="text-xs font-mono">
             {project.id.slice(0, 8)}
           </Badge>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRefreshSpeakerSession}
+            disabled={refreshingSpeakerSession}
+          >
+            {refreshingSpeakerSession ? "Refreshing..." : "Refresh Speaker Session"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate(`/projects/${encodeURIComponent(project.id)}/chat`)}
+          >
+            Chat
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate(`/projects/${encodeURIComponent(project.id)}/tasks`)}
+          >
+            Tasks
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate(`/projects/${encodeURIComponent(project.id)}/memory`)}
+          >
+            Memory
+          </Button>
         </div>
       </div>
 
@@ -410,6 +500,18 @@ export function ProjectDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      <RemoteSkillManager
+        title="Project Remote Skills"
+        description={`Installed under ${project.root}/.hiboss/skills`}
+        loading={remoteSkillsLoading}
+        error={remoteSkillsError}
+        skills={remoteSkills}
+        onRefresh={loadRemoteSkills}
+        onAdd={handleAddRemoteSkill}
+        onUpdate={handleUpdateRemoteSkill}
+        onRemove={handleRemoveRemoteSkill}
+      />
     </div>
   );
 }
