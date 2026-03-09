@@ -4,7 +4,7 @@
  * Protocol:
  *   Client → Server:
  *     { type: "auth", token: "..." }         - authenticate
- *     { type: "send", agentName: "...", text: "..." } - send message
+ *     { type: "send", agentName: "...", text: "...", clientMessageId?: "..." } - send message
  *     { type: "subscribe", agentName: "..." } - subscribe to agent updates
  *
  *   Server → Client:
@@ -15,15 +15,15 @@
  *     { type: "error", message: "..." }       - error
  */
 
-import { WebSocketServer, WebSocket } from "ws";
 import type { Server as HttpServer } from "node:http";
-import type { DaemonContext } from "../../daemon/rpc/context.js";
+import { WebSocket, WebSocketServer } from "ws";
 import { formatAgentAddress } from "../../adapters/types.js";
-import { WEB_BOSS_ADDRESS } from "../handlers/envelopes.js";
-import { validateDirectChatTarget } from "../direct-chat-policy.js";
-import { logEvent } from "../../shared/daemon-log.js";
-import type { Envelope } from "../../envelope/types.js";
 import { resolveSessionRefreshTargetForAgent } from "../../agent/executor.js";
+import type { DaemonContext } from "../../daemon/rpc/context.js";
+import type { Envelope } from "../../envelope/types.js";
+import { logEvent } from "../../shared/daemon-log.js";
+import { validateDirectChatTarget } from "../direct-chat-policy.js";
+import { WEB_BOSS_ADDRESS } from "../handlers/envelopes.js";
 
 interface WsClient {
   ws: WebSocket;
@@ -36,6 +36,7 @@ interface WsClientMessage {
   token?: string;
   agentName?: string;
   text?: string;
+  clientMessageId?: string;
 }
 
 function parseProjectIdFromSessionTarget(agentName: string, sessionTarget: string): string | undefined {
@@ -43,6 +44,14 @@ function parseProjectIdFromSessionTarget(agentName: string, sessionTarget: strin
   if (!sessionTarget.startsWith(prefix)) return undefined;
   const projectId = sessionTarget.slice(prefix.length).trim();
   return projectId.length > 0 ? projectId : undefined;
+}
+
+function readClientMessageIdFromMetadata(metadata: Record<string, unknown> | undefined): string | undefined {
+  if (!metadata) return undefined;
+  const raw = metadata.clientMessageId;
+  if (typeof raw !== "string") return undefined;
+  const normalized = raw.trim();
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 export interface AgentWsStatusPayload {
@@ -54,6 +63,33 @@ export interface AgentWsStatusPayload {
     startedAt: number;
     sessionTarget?: string;
     projectId?: string;
+  };
+}
+
+export interface WsEnvelopePayload {
+  id: string;
+  from: string;
+  to: string;
+  fromBoss: boolean;
+  text: string;
+  status: string;
+  createdAt: number;
+  clientMessageId?: string;
+}
+
+export function buildWsEnvelopePayload(envelope: Envelope): WsEnvelopePayload {
+  const clientMessageId = readClientMessageIdFromMetadata(
+    envelope.metadata as Record<string, unknown> | undefined
+  );
+  return {
+    id: envelope.id,
+    from: envelope.from,
+    to: envelope.to,
+    fromBoss: envelope.fromBoss,
+    text: envelope.content.text ?? "",
+    status: envelope.status,
+    createdAt: envelope.createdAt,
+    ...(clientMessageId ? { clientMessageId } : {}),
   };
 }
 
@@ -166,20 +202,13 @@ export class ChatWebSocket {
   broadcastEnvelope(envelope: Envelope): void {
     const agentName = this.extractAgentName(envelope);
     if (!agentName) return;
+    const payload = buildWsEnvelopePayload(envelope);
 
     for (const client of this.clients) {
       if (client.authenticated && client.subscriptions.has(agentName)) {
         this.send(client, {
           type: "envelope",
-          envelope: {
-            id: envelope.id,
-            from: envelope.from,
-            to: envelope.to,
-            fromBoss: envelope.fromBoss,
-            text: envelope.content.text ?? "",
-            status: envelope.status,
-            createdAt: envelope.createdAt,
-          },
+          envelope: payload,
         });
       }
     }
@@ -212,7 +241,7 @@ export class ChatWebSocket {
         this.handleAuth(client, msg.token ?? "");
         break;
       case "send":
-        this.handleSend(client, msg.agentName ?? "", msg.text ?? "");
+        this.handleSend(client, msg.agentName ?? "", msg.text ?? "", msg.clientMessageId ?? "");
         break;
       case "subscribe":
         this.handleSubscribe(client, msg.agentName ?? "");
@@ -247,7 +276,12 @@ export class ChatWebSocket {
     }
   }
 
-  private async handleSend(client: WsClient, agentName: string, text: string): Promise<void> {
+  private async handleSend(
+    client: WsClient,
+    agentName: string,
+    text: string,
+    clientMessageIdRaw: string
+  ): Promise<void> {
     if (!client.authenticated) {
       this.send(client, { type: "error", message: "Not authenticated" });
       return;
@@ -276,12 +310,16 @@ export class ChatWebSocket {
     }
 
     try {
+      const clientMessageId = clientMessageIdRaw.trim();
       const envelope = await this.daemon.router.routeEnvelope({
         from: WEB_BOSS_ADDRESS,
         to: formatAgentAddress(agent.name),
         fromBoss: true,
         content: { text: text.trim() },
-        metadata: { source: "web" },
+        metadata: {
+          source: "web",
+          ...(clientMessageId ? { clientMessageId } : {}),
+        },
       });
 
       this.daemon.scheduler.onEnvelopeCreated(envelope);

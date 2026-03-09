@@ -39,6 +39,12 @@ function addressBadgeVariant(addr: string): "default" | "secondary" | "outline" 
   return "outline";
 }
 
+function statusLabel(status: string): string {
+  if (status === "pending") return "待处理";
+  if (status === "done") return "已完成";
+  return status;
+}
+
 const cardVariants = {
   hidden: { opacity: 0, y: 10 },
   visible: (i: number) => ({
@@ -109,7 +115,7 @@ export function EnvelopesPage() {
   if (error) {
     return (
       <div className="p-6">
-        <p className="text-destructive">Error: {error}</p>
+        <p className="text-destructive">错误：{error}</p>
       </div>
     );
   }
@@ -117,8 +123,8 @@ export function EnvelopesPage() {
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Envelopes</h1>
-        <Badge variant="outline">{total} total</Badge>
+        <h1 className="text-2xl font-bold">信封</h1>
+        <Badge variant="outline">共 {total} 条</Badge>
       </div>
 
       {/* Filters */}
@@ -128,13 +134,13 @@ export function EnvelopesPage() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Status</SelectItem>
-            <SelectItem value="pending">Pending</SelectItem>
-            <SelectItem value="done">Done</SelectItem>
+            <SelectItem value="all">全部状态</SelectItem>
+            <SelectItem value="pending">待处理</SelectItem>
+            <SelectItem value="done">已完成</SelectItem>
           </SelectContent>
         </Select>
         <Input
-          placeholder="Filter by agent name..."
+          placeholder="按智能体名称筛选..."
           value={agentFilter}
           onChange={(e) => setAgentFilter(e.target.value)}
           className="w-64"
@@ -145,7 +151,7 @@ export function EnvelopesPage() {
           onClick={() => loadEnvelopes()}
           disabled={loading}
         >
-          Refresh
+          刷新
         </Button>
       </div>
 
@@ -176,17 +182,17 @@ export function EnvelopesPage() {
                       </Badge>
                       {env.fromBoss && (
                         <Badge variant="outline" className="text-xs">
-                          boss
+                          Boss
                         </Badge>
                       )}
                       {env.hasAttachments && (
                         <Badge variant="outline" className="text-xs">
-                          attachments
+                          附件
                         </Badge>
                       )}
                     </div>
                     <p className="text-sm text-muted-foreground truncate">
-                      {env.text || "(no text)"}
+                      {env.text || "（无文本）"}
                     </p>
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">
@@ -194,7 +200,7 @@ export function EnvelopesPage() {
                       variant={env.status === "pending" ? "default" : "secondary"}
                       className="text-xs"
                     >
-                      {env.status}
+                      {statusLabel(env.status)}
                     </Badge>
                     <span className="text-xs text-muted-foreground whitespace-nowrap">
                       {formatTime(env.createdAt)}
@@ -212,20 +218,20 @@ export function EnvelopesPage() {
 
       {envelopes.length === 0 && !loading && (
         <div className="text-center py-12">
-          <p className="text-muted-foreground">No envelopes found.</p>
+          <p className="text-muted-foreground">没有找到信封。</p>
         </div>
       )}
 
       {loading && (
         <div className="text-center py-4">
-          <p className="text-muted-foreground">Loading...</p>
+          <p className="text-muted-foreground">加载中...</p>
         </div>
       )}
 
       {envelopes.length > 0 && envelopes.length < total && (
         <div className="text-center py-4">
           <Button variant="outline" onClick={handleLoadMore} disabled={loading}>
-            Load More
+            加载更多
           </Button>
         </div>
       )}
@@ -256,7 +262,7 @@ function EnvelopeDetailDialog({
       <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="font-mono text-sm">
-            Envelope {envelope.id.replace(/-/g, "").slice(0, 8)}
+            信封 {envelope.id.replace(/-/g, "").slice(0, 8)}
           </DialogTitle>
         </DialogHeader>
 
@@ -264,7 +270,7 @@ function EnvelopeDetailDialog({
           {/* Metadata */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Details</CardTitle>
+              <CardTitle className="text-sm">详情</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="space-y-2 text-sm">
@@ -273,37 +279,37 @@ function EnvelopeDetailDialog({
                   <span className="font-mono text-xs">{envelope.id}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">From</span>
+                  <span className="text-muted-foreground">来源</span>
                   <Badge variant={addressBadgeVariant(envelope.from)} className="text-xs">
                     {envelope.from}
                   </Badge>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">To</span>
+                  <span className="text-muted-foreground">目标</span>
                   <Badge variant={addressBadgeVariant(envelope.to)} className="text-xs">
                     {envelope.to}
                   </Badge>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Status</span>
+                  <span className="text-muted-foreground">状态</span>
                   <Badge
                     variant={envelope.status === "pending" ? "default" : "secondary"}
                     className="text-xs"
                   >
-                    {envelope.status}
+                    {statusLabel(envelope.status)}
                   </Badge>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">From Boss</span>
-                  <span>{envelope.fromBoss ? "Yes" : "No"}</span>
+                  <span className="text-muted-foreground">来自 Boss</span>
+                  <span>{envelope.fromBoss ? "是" : "否"}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Created</span>
+                  <span className="text-muted-foreground">创建时间</span>
                   <span>{formatTime(envelope.createdAt)}</span>
                 </div>
                 {envelope.deliverAt && (
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Deliver At</span>
+                    <span className="text-muted-foreground">投递时间</span>
                     <span>{formatTime(envelope.deliverAt)}</span>
                   </div>
                 )}
@@ -314,18 +320,18 @@ function EnvelopeDetailDialog({
           {/* Content */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Content</CardTitle>
+              <CardTitle className="text-sm">内容</CardTitle>
             </CardHeader>
             <CardContent>
               <pre className="text-sm whitespace-pre-wrap break-words bg-muted p-3 rounded-md max-h-[40vh] overflow-y-auto">
-                {envelope.content?.text || "(no text)"}
+                {envelope.content?.text || "（无文本）"}
               </pre>
               {envelope.content?.attachments && envelope.content.attachments.length > 0 && (
                 <div className="mt-3">
-                  <p className="text-sm font-medium mb-1">Attachments</p>
+                  <p className="text-sm font-medium mb-1">附件</p>
                   <div className="space-y-1">
-                    {envelope.content.attachments.map((att, i) => (
-                      <div key={i} className="text-xs text-muted-foreground font-mono">
+                    {envelope.content.attachments.map((att) => (
+                      <div key={`${att.source}:${att.filename ?? ""}`} className="text-xs text-muted-foreground font-mono">
                         {att.filename || att.source}
                       </div>
                     ))}
@@ -339,7 +345,7 @@ function EnvelopeDetailDialog({
           {envelope.metadata && Object.keys(envelope.metadata).length > 0 && (
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm">Metadata</CardTitle>
+                <CardTitle className="text-sm">元数据</CardTitle>
               </CardHeader>
               <CardContent>
                 <pre className="text-xs whitespace-pre-wrap break-words bg-muted p-3 rounded-md max-h-[30vh] overflow-y-auto">

@@ -24,6 +24,7 @@ function FileTreeItem({
     return (
       <div>
         <button
+          type="button"
           className="w-full text-left px-2 py-1 text-sm hover:bg-muted rounded flex items-center gap-1"
           style={{ paddingLeft: `${depth * 16 + 8}px` }}
           onClick={() => setExpanded(!expanded)}
@@ -46,6 +47,7 @@ function FileTreeItem({
 
   return (
     <button
+      type="button"
       className={`w-full text-left px-2 py-1 text-sm rounded truncate ${
         isSelected
           ? "bg-primary text-primary-foreground"
@@ -124,7 +126,7 @@ export function PromptsPage() {
   if (error) {
     return (
       <div className="p-6">
-        <p className="text-destructive">Error: {error}</p>
+        <p className="text-destructive">错误：{error}</p>
       </div>
     );
   }
@@ -132,7 +134,7 @@ export function PromptsPage() {
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Prompt Templates</h1>
+        <h1 className="text-2xl font-bold">提示词模板</h1>
         {promptsDir && (
           <Badge variant="outline" className="font-mono text-xs">
             {promptsDir}
@@ -145,7 +147,7 @@ export function PromptsPage() {
         <motion.div initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }}>
           <Card className="h-full">
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium">Templates</CardTitle>
+              <CardTitle className="text-sm font-medium">模板树</CardTitle>
             </CardHeader>
             <CardContent className="p-2 overflow-auto max-h-[70vh]">
               {tree.map((entry) => (
@@ -167,13 +169,13 @@ export function PromptsPage() {
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium">
-                  {selectedPath || "Select a template"}
+                  {selectedPath || "请选择一个模板"}
                 </CardTitle>
                 {selectedPath && (
                   <div className="flex items-center gap-2">
                     {hasChanges && (
                       <Button variant="ghost" size="sm" onClick={handleReset}>
-                        Reset
+                        重置
                       </Button>
                     )}
                     <Button
@@ -181,10 +183,10 @@ export function PromptsPage() {
                       onClick={handleSave}
                       disabled={saving || !hasChanges}
                     >
-                      {saving ? "Saving..." : "Save"}
+                      {saving ? "保存中..." : "保存"}
                     </Button>
                     {saveSuccess && (
-                      <span className="text-sm text-green-600">Saved</span>
+                      <span className="text-sm text-green-600">已保存</span>
                     )}
                   </div>
                 )}
@@ -192,7 +194,7 @@ export function PromptsPage() {
             </CardHeader>
             <CardContent>
               {loading ? (
-                <p className="text-muted-foreground">Loading...</p>
+                <p className="text-muted-foreground">加载中...</p>
               ) : selectedPath ? (
                 <Textarea
                   value={content}
@@ -203,7 +205,7 @@ export function PromptsPage() {
               ) : (
                 <div className="flex items-center justify-center min-h-[60vh]">
                   <p className="text-muted-foreground">
-                    Select a template from the tree to view and edit.
+                    从左侧模板树选择文件后可查看与编辑。
                   </p>
                 </div>
               )}

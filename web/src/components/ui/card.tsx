@@ -1,4 +1,4 @@
-import * as React from "react"
+import type * as React from "react"
 
 import { cn } from "@/lib/utils"
 
@@ -7,7 +7,7 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card"
       className={cn(
-        "flex flex-col gap-6 rounded-xl border bg-card py-6 text-card-foreground shadow-sm",
+        "mesh-card flex flex-col gap-6 rounded-2xl border border-border/75 py-6 text-card-foreground shadow-[0_16px_40px_-22px_color-mix(in_oklab,var(--foreground)_42%,transparent)]",
         className
       )}
       {...props}

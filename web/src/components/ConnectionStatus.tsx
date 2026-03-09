@@ -29,10 +29,14 @@ export function ConnectionStatus({
       <span
         className={cn(
           dotClass,
-          isLive ? "bg-green-500" : isConnecting ? "bg-yellow-500" : "bg-red-500"
+          isLive
+            ? "bg-[oklch(0.67_0.17_162)]"
+            : isConnecting
+              ? "bg-[oklch(0.75_0.15_83)]"
+              : "bg-[oklch(0.64_0.21_27)]"
         )}
       />
-      <span>{isLive ? "Live" : isConnecting ? "Connecting..." : "Offline"}</span>
+      <span>{isLive ? "在线" : isConnecting ? "连接中..." : "离线"}</span>
     </div>
   );
 }

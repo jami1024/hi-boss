@@ -32,9 +32,30 @@ const TASK_STATES: ProjectTaskState[] = [
   "cancelled",
 ];
 
+function stateLabel(state: ProjectTaskState): string {
+  if (state === "created") return "已创建";
+  if (state === "planning") return "规划中";
+  if (state === "dispatched") return "已分派";
+  if (state === "executing") return "执行中";
+  if (state === "completed") return "已完成";
+  return "已取消";
+}
+
 function formatTime(ms: number | undefined): string {
   if (!ms) return "—";
   return new Date(ms).toLocaleString();
+}
+
+function envelopeStatusLabel(status: string): string {
+  if (status === "pending") return "待处理";
+  if (status === "done") return "已完成";
+  return status;
+}
+
+function activityKindLabel(kind: ActivityItem["kind"]): string {
+  if (kind === "flow") return "流转";
+  if (kind === "progress") return "进度";
+  return "信封";
 }
 
 export function ProjectTaskDetailPage() {
@@ -94,8 +115,8 @@ export function ProjectTaskDetailPage() {
       id: `flow-${index}-${entry.at}`,
       kind: "flow",
       at: entry.at,
-      title: `State: ${entry.toState}`,
-      detail: [entry.fromState ? `from ${entry.fromState}` : "initial", entry.actor ? `actor ${entry.actor}` : "", entry.reason ? `reason ${entry.reason}` : ""]
+      title: `状态：${stateLabel(entry.toState)}`,
+      detail: [entry.fromState ? `从 ${stateLabel(entry.fromState)}` : "初始状态", entry.actor ? `执行者 ${entry.actor}` : "", entry.reason ? `原因 ${entry.reason}` : ""]
         .filter(Boolean)
         .join(" · "),
     }));
@@ -103,18 +124,18 @@ export function ProjectTaskDetailPage() {
       id: `progress-${entry.id}`,
       kind: "progress",
       at: entry.createdAt,
-      title: `Progress by ${entry.agentName}`,
+      title: `${entry.agentName} 的进度更新`,
       detail:
         entry.todos && entry.todos.length > 0
-          ? `${entry.content} · todos: ${entry.todos.join(" | ")}`
+          ? `${entry.content} · 待办：${entry.todos.join(" | ")}`
           : entry.content,
     }));
     const envelopeItems: ActivityItem[] = envelopes.map((entry) => ({
       id: `envelope-${entry.id}`,
       kind: "envelope",
       at: entry.createdAt,
-      title: `Envelope ${entry.from} → ${entry.to}`,
-      detail: `${entry.text} · status ${entry.status}`,
+      title: `信封 ${entry.from} → ${entry.to}`,
+      detail: `${entry.text} · 状态 ${envelopeStatusLabel(entry.status)}`,
     }));
     return [...flowItems, ...progressItems, ...envelopeItems].sort((a, b) => a.at - b.at);
   }, [task, progress, envelopes]);
@@ -188,22 +209,22 @@ export function ProjectTaskDetailPage() {
   };
 
   if (loading) {
-    return <div className="p-6 text-sm text-muted-foreground">Loading task details...</div>;
+    return <div className="p-6 text-sm text-muted-foreground">加载任务详情中...</div>;
   }
 
   if (error && !task) {
     return (
       <div className="p-6 space-y-4">
-        <p className="text-destructive">Error: {error}</p>
+        <p className="text-destructive">错误：{error}</p>
         <Button variant="outline" onClick={() => navigate(-1)}>
-          Back
+          返回
         </Button>
       </div>
     );
   }
 
   if (!task || !id) {
-    return <div className="p-6 text-sm text-muted-foreground">Task not found.</div>;
+    return <div className="p-6 text-sm text-muted-foreground">未找到任务。</div>;
   }
 
   return (
@@ -211,43 +232,43 @@ export function ProjectTaskDetailPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={() => navigate(`/projects/${encodeURIComponent(id)}/tasks`)}>
-            &larr; Tasks
+            &larr; 任务
           </Button>
           <h1 className="text-2xl font-bold truncate">{task.title}</h1>
           <Badge variant="outline" className="font-mono text-xs">
             {task.id}
           </Badge>
           <Badge variant="secondary" className="text-xs">
-            {task.state}
+            {stateLabel(task.state)}
           </Badge>
         </div>
         <Button variant="outline" size="sm" onClick={() => void load()}>
-          Refresh
+          刷新
         </Button>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Task Overview</CardTitle>
+          <CardTitle className="text-base">任务概览</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-          <div>Project: {project?.name ?? task.projectId}</div>
-          <div>Priority: {task.priority}</div>
-          <div>Assignee: {task.assignee ?? "—"}</div>
-          <div>Output: {task.output ?? "—"}</div>
-          <div>Created: {formatTime(task.createdAt)}</div>
-          <div>Updated: {formatTime(task.updatedAt)}</div>
+          <div>项目：{project?.name ?? task.projectId}</div>
+          <div>优先级：{task.priority}</div>
+          <div>执行者：{task.assignee ?? "—"}</div>
+          <div>产出：{task.output ?? "—"}</div>
+          <div>创建时间：{formatTime(task.createdAt)}</div>
+          <div>更新时间：{formatTime(task.updatedAt)}</div>
         </CardContent>
       </Card>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Update State</CardTitle>
+            <CardTitle className="text-base">更新状态</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="space-y-2">
-              <Label htmlFor="nextState">State</Label>
+              <Label htmlFor="nextState">状态</Label>
               <Select value={nextState} onValueChange={(value) => setNextState(value as ProjectTaskState)}>
                 <SelectTrigger id="nextState">
                   <SelectValue />
@@ -255,20 +276,20 @@ export function ProjectTaskDetailPage() {
                 <SelectContent>
                   {TASK_STATES.map((state) => (
                     <SelectItem key={state} value={state}>
-                      {state}
+                      {stateLabel(state)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="assignee">Assignee</Label>
+              <Label htmlFor="assignee">执行者</Label>
               <Input
                 id="assignee"
                 value={assignee}
                 onChange={(e) => setAssignee(e.target.value)}
                 list="task-assignee-options"
-                placeholder={activeLeaders.length > 0 ? "choose active leader" : "leader agent name"}
+                placeholder={activeLeaders.length > 0 ? "选择激活的领队" : "领队智能体名称"}
               />
               {activeLeaders.length > 0 && (
                 <>
@@ -278,46 +299,46 @@ export function ProjectTaskDetailPage() {
                     ))}
                   </datalist>
                   <p className="text-xs text-muted-foreground">
-                    Active leaders: {activeLeaders.join(", ")}
+                    激活领队：{activeLeaders.join(", ")}
                   </p>
                 </>
               )}
             </div>
             {nextState === "dispatched" && (
               <div className="space-y-2">
-                <Label htmlFor="dispatchText">Dispatch Text (optional)</Label>
+                <Label htmlFor="dispatchText">分派文本（可选）</Label>
                 <Textarea
                   id="dispatchText"
                   value={dispatchText}
                   onChange={(e) => setDispatchText(e.target.value)}
-                  placeholder="task summary for the assignee"
+                  placeholder="给执行者的任务摘要"
                   rows={4}
                 />
                 <p className="text-xs text-muted-foreground">
-                  If empty, the default dispatch template is used.
+                  为空时将使用默认分派模板。
                 </p>
               </div>
             )}
             <div className="space-y-2">
-              <Label htmlFor="reason">Reason</Label>
+              <Label htmlFor="reason">原因</Label>
               <Input
                 id="reason"
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                placeholder="why this transition"
+                placeholder="说明状态变更原因"
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="output">Output</Label>
+              <Label htmlFor="output">输出</Label>
               <Input
                 id="output"
                 value={output}
                 onChange={(e) => setOutput(e.target.value)}
-                placeholder="summary or path"
+                placeholder="摘要或路径"
               />
             </div>
             <Button onClick={handleUpdateState} disabled={savingState || (nextState === "dispatched" && !assignee.trim())}>
-              {savingState ? "Saving..." : "Apply State"}
+              {savingState ? "保存中..." : "应用状态"}
             </Button>
             <div className="flex items-center gap-2">
               <Button
@@ -325,14 +346,14 @@ export function ProjectTaskDetailPage() {
                 onClick={() => void handleCancelTask(false)}
                 disabled={cancellingTask || task.state === "completed" || task.state === "cancelled"}
               >
-                {cancellingTask ? "Cancelling..." : "Cancel Task"}
+                {cancellingTask ? "取消中..." : "取消任务"}
               </Button>
               <Button
                 variant="destructive"
                 onClick={() => void handleCancelTask(true)}
                 disabled={cancellingTask || !task.assignee || task.state === "completed" || task.state === "cancelled"}
               >
-                {cancellingTask ? "Stopping..." : "Force Stop Agent"}
+                {cancellingTask ? "停止中..." : "强制停止智能体"}
               </Button>
             </div>
           </CardContent>
@@ -340,38 +361,38 @@ export function ProjectTaskDetailPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Append Progress</CardTitle>
+            <CardTitle className="text-base">追加进度</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="space-y-2">
-              <Label htmlFor="progressAgent">Agent</Label>
+              <Label htmlFor="progressAgent">智能体</Label>
               <Input
                 id="progressAgent"
                 value={progressAgent}
                 onChange={(e) => setProgressAgent(e.target.value)}
-                placeholder="agent name"
+                placeholder="智能体名称"
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="progressContent">Progress</Label>
+              <Label htmlFor="progressContent">进度内容</Label>
               <Input
                 id="progressContent"
                 value={progressContent}
                 onChange={(e) => setProgressContent(e.target.value)}
-                placeholder="current progress"
+                placeholder="当前进展"
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="progressTodos">Todos (optional, split by ; or ,)</Label>
+              <Label htmlFor="progressTodos">待办（可选，用 ; 或 , 分隔）</Label>
               <Input
                 id="progressTodos"
                 value={progressTodos}
                 onChange={(e) => setProgressTodos(e.target.value)}
-                placeholder="step A done; step B doing"
+                placeholder="步骤A完成; 步骤B进行中"
               />
             </div>
             <Button onClick={handleAppendProgress} disabled={savingProgress || !progressContent.trim()}>
-              {savingProgress ? "Appending..." : "Append Progress"}
+              {savingProgress ? "追加中..." : "追加进度"}
             </Button>
           </CardContent>
         </Card>
@@ -379,17 +400,17 @@ export function ProjectTaskDetailPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Unified Activity Stream</CardTitle>
+          <CardTitle className="text-base">统一活动流</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {activities.length === 0 && (
-            <p className="text-sm text-muted-foreground">No activity yet.</p>
+            <p className="text-sm text-muted-foreground">暂无活动。</p>
           )}
           {activities.map((item) => (
             <div key={item.id} className="border rounded-lg p-3 space-y-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
-                  {item.kind}
+                  {activityKindLabel(item.kind)}
                 </Badge>
                 <span className="font-medium text-sm">{item.title}</span>
                 <span className="text-xs text-muted-foreground">{formatTime(item.at)}</span>

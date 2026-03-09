@@ -39,9 +39,9 @@ import { RemoteSkillManager } from "@/components/RemoteSkillManager";
 
 function healthLabel(health: string): string {
   switch (health) {
-    case "ok": return "Healthy";
-    case "error": return "Error";
-    default: return "Unknown";
+    case "ok": return "健康";
+    case "error": return "异常";
+    default: return "未知";
   }
 }
 
@@ -56,6 +56,27 @@ function healthColor(health: string): string {
 function formatTime(ms: number | null): string {
   if (!ms) return "—";
   return new Date(ms).toLocaleString();
+}
+
+function roleLabel(role: string | null): string {
+  if (role === "speaker") return "发言者";
+  if (role === "leader") return "领队";
+  return role ?? "—";
+}
+
+function agentStateLabel(state: string): string {
+  if (state === "running") return "运行中";
+  if (state === "idle") return "空闲";
+  if (state === "stopped") return "已停止";
+  return "未知";
+}
+
+function runStatusLabel(status: string): string {
+  if (status === "completed") return "已完成";
+  if (status === "failed") return "失败";
+  if (status === "running") return "运行中";
+  if (status === "cancelled") return "已取消";
+  return "未知";
 }
 
 export function AgentDetailPage() {
@@ -271,9 +292,9 @@ export function AgentDetailPage() {
   if (error) {
     return (
       <div className="p-6">
-        <p className="text-destructive">Error: {error}</p>
+        <p className="text-destructive">错误：{error}</p>
         <Button variant="outline" className="mt-4" onClick={() => navigate("/agents")}>
-          Back to Agents
+          返回智能体列表
         </Button>
       </div>
     );
@@ -282,7 +303,7 @@ export function AgentDetailPage() {
   if (!agent || !status) {
     return (
       <div className="p-6">
-        <p className="text-muted-foreground">Loading...</p>
+        <p className="text-muted-foreground">加载中...</p>
       </div>
     );
   }
@@ -293,11 +314,11 @@ export function AgentDetailPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={() => navigate("/agents")}>
-            &larr; Back
+            &larr; 返回
           </Button>
           <h1 className="text-2xl font-bold">{agent.name}</h1>
           <Badge variant={agent.role === "speaker" ? "default" : "secondary"}>
-            {agent.role ?? "—"}
+            {roleLabel(agent.role)}
           </Badge>
         </div>
         <div className="flex items-center gap-2">
@@ -307,32 +328,32 @@ export function AgentDetailPage() {
               size="sm"
               onClick={() => navigate(`/agents/${encodeURIComponent(agent.name)}/chat`)}
             >
-              Chat
+              聊天
             </Button>
           )}
           <Button variant="outline" size="sm" onClick={handleRefresh}>
-            Refresh Session
+            刷新会话
           </Button>
           {status.agentState === "running" && (
             <Button variant="outline" size="sm" onClick={handleAbort}>
-              Abort
+              中止
             </Button>
           )}
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="destructive" size="sm">Delete</Button>
+              <Button variant="destructive" size="sm">删除</Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>Delete Agent</AlertDialogTitle>
+                <AlertDialogTitle>删除智能体</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This will permanently delete agent "{agent.name}" and remove all its bindings,
-                  cron schedules, and home directory. This action cannot be undone.
+                  此操作将永久删除智能体“{agent.name}”，并移除其绑定、定时任务和主目录。
+                  此操作不可撤销。
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction onClick={handleDelete}>Delete</AlertDialogAction>
+                <AlertDialogCancel>取消</AlertDialogCancel>
+                <AlertDialogAction onClick={handleDelete}>删除</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
@@ -344,17 +365,17 @@ export function AgentDetailPage() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">State</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">状态</CardTitle>
             </CardHeader>
             <CardContent>
               <Badge variant={status.agentState === "running" ? "default" : "secondary"}>
-                {status.agentState}
+                {agentStateLabel(status.agentState)}
               </Badge>
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Health</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">健康度</CardTitle>
             </CardHeader>
             <CardContent>
               <span className={`font-semibold ${healthColor(status.agentHealth)}`}>
@@ -364,7 +385,7 @@ export function AgentDetailPage() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Pending</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">待处理</CardTitle>
             </CardHeader>
             <CardContent>
               <p className="text-2xl font-bold">{status.pendingCount}</p>
@@ -372,7 +393,7 @@ export function AgentDetailPage() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Last Run</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">最近运行</CardTitle>
             </CardHeader>
             <CardContent>
               {status.lastRun ? (
@@ -383,7 +404,7 @@ export function AgentDetailPage() {
                       : "secondary"}
                     className="text-xs"
                   >
-                    {status.lastRun.status}
+                    {runStatusLabel(status.lastRun.status)}
                   </Badge>
                   <p className="text-xs text-muted-foreground mt-1">
                     {formatTime(status.lastRun.completedAt ?? status.lastRun.startedAt)}
@@ -401,7 +422,7 @@ export function AgentDetailPage() {
       {status.lastRun?.error && (
         <Card className="border-destructive">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm text-destructive">Last Run Error</CardTitle>
+            <CardTitle className="text-sm text-destructive">最近运行错误</CardTitle>
           </CardHeader>
           <CardContent>
             <pre className="text-sm text-destructive whitespace-pre-wrap">{status.lastRun.error}</pre>
@@ -412,46 +433,46 @@ export function AgentDetailPage() {
       {/* Tabs for editing */}
       <Tabs defaultValue="general">
         <TabsList>
-          <TabsTrigger value="general">General</TabsTrigger>
-          <TabsTrigger value="provider">Provider</TabsTrigger>
-          <TabsTrigger value="session">Session Policy</TabsTrigger>
-          <TabsTrigger value="skills">Remote Skills</TabsTrigger>
-          <TabsTrigger value="info">Info</TabsTrigger>
+          <TabsTrigger value="general">通用</TabsTrigger>
+          <TabsTrigger value="provider">供应商</TabsTrigger>
+          <TabsTrigger value="session">会话策略</TabsTrigger>
+          <TabsTrigger value="skills">远程技能</TabsTrigger>
+          <TabsTrigger value="info">信息</TabsTrigger>
         </TabsList>
 
         <TabsContent value="general" className="space-y-4 mt-4">
           <Card>
             <CardContent className="pt-6 space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="description">Description</Label>
+                <Label htmlFor="description">描述</Label>
                 <Textarea
                   id="description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Agent description..."
+                  placeholder="智能体描述..."
                   rows={3}
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="workspace">Workspace</Label>
+                <Label htmlFor="workspace">工作目录</Label>
                 <Input
                   id="workspace"
                   value={workspace}
                   onChange={(e) => setWorkspace(e.target.value)}
-                  placeholder="/path/to/workspace"
+                  placeholder="/Users/你的用户名/projects/workspace"
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="permission">Permission Level</Label>
+                <Label htmlFor="permission">权限级别</Label>
                 <Select value={permissionLevel} onValueChange={setPermissionLevel}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="restricted">Restricted</SelectItem>
-                    <SelectItem value="standard">Standard</SelectItem>
-                    <SelectItem value="privileged">Privileged</SelectItem>
-                    <SelectItem value="boss">Boss</SelectItem>
+                    <SelectItem value="restricted">受限</SelectItem>
+                    <SelectItem value="standard">标准</SelectItem>
+                    <SelectItem value="privileged">高权限</SelectItem>
+                    <SelectItem value="boss">Boss（最高权限）</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -463,7 +484,7 @@ export function AgentDetailPage() {
           <Card>
             <CardContent className="pt-6 space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="provider">Provider</Label>
+                <Label htmlFor="provider">供应商</Label>
                 <Select value={provider} onValueChange={(v) => setProvider(v as "claude" | "codex")}>
                   <SelectTrigger>
                     <SelectValue />
@@ -475,16 +496,16 @@ export function AgentDetailPage() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="model">Model</Label>
+                <Label htmlFor="model">模型</Label>
                 <Input
                   id="model"
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
-                  placeholder="Default model for provider"
+                  placeholder="该供应商的默认模型"
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="reasoning">Reasoning Effort</Label>
+                <Label htmlFor="reasoning">推理强度</Label>
                 <Select
                   value={reasoningEffort || "default"}
                   onValueChange={(v) => setReasoningEffort(v === "default" ? "" : v)}
@@ -493,12 +514,12 @@ export function AgentDetailPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="default">Default</SelectItem>
-                    <SelectItem value="none">None</SelectItem>
-                    <SelectItem value="low">Low</SelectItem>
-                    <SelectItem value="medium">Medium</SelectItem>
-                    <SelectItem value="high">High</SelectItem>
-                    <SelectItem value="xhigh">Extra High</SelectItem>
+                    <SelectItem value="default">默认</SelectItem>
+                    <SelectItem value="none">无</SelectItem>
+                    <SelectItem value="low">低</SelectItem>
+                    <SelectItem value="medium">中</SelectItem>
+                    <SelectItem value="high">高</SelectItem>
+                    <SelectItem value="xhigh">超高</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -510,40 +531,40 @@ export function AgentDetailPage() {
           <Card>
             <CardContent className="pt-6 space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="dailyReset">Daily Reset At (HH:MM)</Label>
+                <Label htmlFor="dailyReset">每日重置时间（HH:MM）</Label>
                 <Input
                   id="dailyReset"
                   value={dailyResetAt}
                   onChange={(e) => setDailyResetAt(e.target.value)}
-                  placeholder="e.g. 09:00"
+                  placeholder="例如 09:00"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Time to reset the agent session daily (in boss timezone).
+                  每日重置智能体会话的时间（按 Boss 时区）。
                 </p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="idleTimeout">Idle Timeout</Label>
+                <Label htmlFor="idleTimeout">空闲超时</Label>
                 <Input
                   id="idleTimeout"
                   value={idleTimeout}
                   onChange={(e) => setIdleTimeout(e.target.value)}
-                  placeholder="e.g. 2h"
+                  placeholder="例如 2h"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Duration string (e.g. "2h", "30m", "1h30m") for idle session timeout.
+                  空闲超时时长（例如 "2h"、"30m"、"1h30m"）。
                 </p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="maxContext">Max Context Length</Label>
+                <Label htmlFor="maxContext">最大上下文长度</Label>
                 <Input
                   id="maxContext"
                   type="number"
                   value={maxContextLength}
                   onChange={(e) => setMaxContextLength(e.target.value)}
-                  placeholder="e.g. 100000"
+                  placeholder="例如 100000"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Maximum context length in tokens before session refresh.
+                  会话刷新前允许的最大 token 上下文长度。
                 </p>
               </div>
             </CardContent>
@@ -552,8 +573,8 @@ export function AgentDetailPage() {
 
         <TabsContent value="skills" className="space-y-4 mt-4">
           <RemoteSkillManager
-            title="Agent Remote Skills"
-            description={`Installed under ~/hiboss/agents/${agent.name}/skills`}
+            title="智能体远程技能"
+            description={`安装目录：~/hiboss/agents/${agent.name}/skills`}
             loading={remoteSkillsLoading}
             error={remoteSkillsError}
             skills={remoteSkills}
@@ -569,40 +590,40 @@ export function AgentDetailPage() {
             <CardContent className="pt-6">
               <div className="space-y-3 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Name</span>
+                  <span className="text-muted-foreground">名称</span>
                   <span className="font-mono">{agent.name}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Role</span>
-                  <span>{agent.role ?? "—"}</span>
+                  <span className="text-muted-foreground">角色</span>
+                  <span>{roleLabel(agent.role)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Created</span>
+                  <span className="text-muted-foreground">创建时间</span>
                   <span>{formatTime(agent.createdAt)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Last Seen</span>
+                  <span className="text-muted-foreground">最近在线</span>
                   <span>{formatTime(agent.lastSeenAt)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Bindings</span>
-                  <span>{agent.bindings.length > 0 ? agent.bindings.join(", ") : "None"}</span>
+                  <span className="text-muted-foreground">绑定</span>
+                  <span>{agent.bindings.length > 0 ? agent.bindings.join(", ") : "无"}</span>
                 </div>
                 {status.currentRun && (
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Current Run</span>
+                    <span className="text-muted-foreground">当前运行</span>
                     <span className="font-mono text-xs">{status.currentRun.id.slice(0, 8)}</span>
                   </div>
                 )}
                 {status.currentRun?.sessionTarget && (
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Current Session Target</span>
+                    <span className="text-muted-foreground">当前会话目标</span>
                     <span className="font-mono text-xs">{status.currentRun.sessionTarget}</span>
                   </div>
                 )}
                 {status.currentRun?.projectId && (
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Current Project</span>
+                    <span className="text-muted-foreground">当前项目</span>
                     <span className="font-mono text-xs">{status.currentRun.projectId}</span>
                   </div>
                 )}
@@ -615,10 +636,10 @@ export function AgentDetailPage() {
       {/* Save bar */}
       <div className="flex items-center gap-3">
         <Button onClick={handleSave} disabled={saving}>
-          {saving ? "Saving..." : "Save Changes"}
+          {saving ? "保存中..." : "保存变更"}
         </Button>
         {saveSuccess && (
-          <span className="text-sm text-green-600">Saved successfully</span>
+          <span className="text-sm text-green-600">保存成功</span>
         )}
         {saveError && (
           <span className="text-sm text-destructive">{saveError}</span>

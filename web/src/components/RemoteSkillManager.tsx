@@ -142,37 +142,37 @@ export function RemoteSkillManager(props: RemoteSkillManagerProps) {
             disabled={props.loading || pendingAction !== ""}
             onClick={() => void props.onRefresh()}
           >
-            {props.loading ? "Refreshing..." : "Refresh"}
+            {props.loading ? "刷新中..." : "刷新"}
           </Button>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div className="space-y-2">
-            <Label htmlFor="remoteSkillName">Skill Name</Label>
+            <Label htmlFor="remoteSkillName">技能名</Label>
             <Input
               id="remoteSkillName"
               value={skillName}
               onChange={(e) => setSkillName(e.target.value)}
-              placeholder="code-review"
+              placeholder="例如：code-review"
             />
           </div>
           <div className="space-y-2 md:col-span-2">
-            <Label htmlFor="remoteSkillSource">Source URL</Label>
+            <Label htmlFor="remoteSkillSource">来源 URL</Label>
             <Input
               id="remoteSkillSource"
               value={sourceUrl}
               onChange={(e) => setSourceUrl(e.target.value)}
-              placeholder="https://github.com/org/repo/tree/main/skills/code-review"
+              placeholder="例如：https://github.com/org/repo/tree/main/skills/code-review"
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="remoteSkillRef">Ref (optional)</Label>
+            <Label htmlFor="remoteSkillRef">分支/标签（可选）</Label>
             <Input
               id="remoteSkillRef"
               value={sourceRef}
               onChange={(e) => setSourceRef(e.target.value)}
-              placeholder="main"
+              placeholder="例如：main"
             />
           </div>
           <div className="flex items-end md:col-span-2">
@@ -185,7 +185,7 @@ export function RemoteSkillManager(props: RemoteSkillManagerProps) {
                 !sourceUrl.trim()
               }
             >
-              {pendingAction.startsWith("add:") ? "Adding..." : "Add Remote Skill"}
+              {pendingAction.startsWith("add:") ? "添加中..." : "添加远程技能"}
             </Button>
           </div>
         </div>
@@ -199,7 +199,7 @@ export function RemoteSkillManager(props: RemoteSkillManagerProps) {
         )}
 
         {sortedSkills.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No remote skills installed yet.</p>
+          <p className="text-sm text-muted-foreground">尚未安装远程技能。</p>
         ) : (
           <div className="space-y-3">
             {sortedSkills.map((skill) => (
@@ -221,7 +221,7 @@ export function RemoteSkillManager(props: RemoteSkillManagerProps) {
                       disabled={props.loading || pendingAction !== ""}
                       onClick={() => void handleUpdate(skill.skillName)}
                     >
-                      {pendingAction === `update:${skill.skillName}` ? "Updating..." : "Update"}
+                      {pendingAction === `update:${skill.skillName}` ? "更新中..." : "更新"}
                     </Button>
                     <Button
                       size="sm"
@@ -229,17 +229,17 @@ export function RemoteSkillManager(props: RemoteSkillManagerProps) {
                       disabled={props.loading || pendingAction !== ""}
                       onClick={() => void handleRemove(skill.skillName)}
                     >
-                      {pendingAction === `remove:${skill.skillName}` ? "Removing..." : "Remove"}
+                      {pendingAction === `remove:${skill.skillName}` ? "移除中..." : "移除"}
                     </Button>
                   </div>
                 </div>
 
                 <div className="text-xs text-muted-foreground space-y-1 break-words">
-                  <p>source: {skill.sourceUrl}</p>
-                  <p>ref: {skill.sourceRef} · path: {skill.sourcePath || "."}</p>
-                  <p>files: {skill.fileCount} · checksum: {skill.checksum.slice(0, 16)}...</p>
+                  <p>来源：{skill.sourceUrl}</p>
+                  <p>分支/标签：{skill.sourceRef} · 路径：{skill.sourcePath || "."}</p>
+                  <p>文件数：{skill.fileCount} · 校验：{skill.checksum.slice(0, 16)}...</p>
                   <p>
-                    added: {formatDate(skill.addedAt)} · updated: {formatDate(skill.lastUpdated)}
+                    添加：{formatDate(skill.addedAt)} · 更新：{formatDate(skill.lastUpdated)}
                   </p>
                 </div>
 
@@ -252,7 +252,7 @@ export function RemoteSkillManager(props: RemoteSkillManagerProps) {
                         [skill.skillName]: e.target.value,
                       }))
                     }
-                    placeholder="Optional source URL override"
+                    placeholder="可选：覆盖来源 URL"
                   />
                   <Input
                     value={updateRefBySkill[skill.skillName] ?? ""}
@@ -262,7 +262,7 @@ export function RemoteSkillManager(props: RemoteSkillManagerProps) {
                         [skill.skillName]: e.target.value,
                       }))
                     }
-                    placeholder="Optional ref override"
+                    placeholder="可选：覆盖分支/标签"
                   />
                 </div>
               </div>

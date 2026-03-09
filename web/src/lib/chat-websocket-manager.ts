@@ -6,6 +6,7 @@ interface ChatMessage {
   text: string;
   status: string;
   createdAt: number;
+  clientMessageId?: string;
 }
 
 interface AgentWsStatus {
@@ -95,9 +96,10 @@ class ChatWebSocketManager {
     };
   }
 
-  sendMessage(agentName: string, text: string): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.authenticated) return;
-    this.ws.send(JSON.stringify({ type: "send", agentName, text }));
+  sendMessage(agentName: string, text: string, clientMessageId?: string): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.authenticated) return false;
+    this.ws.send(JSON.stringify({ type: "send", agentName, text, clientMessageId }));
+    return true;
   }
 
   private hasActiveListeners(): boolean {
@@ -286,8 +288,8 @@ export function registerChatSocketListener(params: RegisterChatSocketListenerPar
   return manager.register(params);
 }
 
-export function sendChatSocketMessage(agentName: string, text: string): void {
-  manager.sendMessage(agentName, text);
+export function sendChatSocketMessage(agentName: string, text: string, clientMessageId?: string): boolean {
+  return manager.sendMessage(agentName, text, clientMessageId);
 }
 
 export function getChatSocketState(): { connected: boolean; authenticated: boolean } {

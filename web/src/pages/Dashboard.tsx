@@ -10,9 +10,9 @@ function formatUptime(ms: number | null): string {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const secs = seconds % 60;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${secs}s`;
-  return `${secs}s`;
+  if (hours > 0) return `${hours}小时 ${minutes}分钟`;
+  if (minutes > 0) return `${minutes}分钟 ${secs}秒`;
+  return `${secs}秒`;
 }
 
 function healthColor(health: string): string {
@@ -25,6 +25,19 @@ function healthColor(health: string): string {
 
 function stateVariant(state: string): "default" | "secondary" | "outline" {
   return state === "running" ? "default" : "secondary";
+}
+
+function stateLabel(state: string): string {
+  if (state === "running") return "运行中";
+  if (state === "idle") return "空闲";
+  if (state === "stopped") return "已停止";
+  return "未知";
+}
+
+function roleLabel(role: string | null | undefined): string {
+  if (role === "speaker") return "发言者";
+  if (role === "leader") return "领队";
+  return role ?? "—";
 }
 
 const cardVariants = {
@@ -42,7 +55,7 @@ export function Dashboard() {
   if (error) {
     return (
       <div className="p-6">
-        <p className="text-destructive">Error: {error}</p>
+        <p className="text-destructive">错误：{error}</p>
       </div>
     );
   }
@@ -50,25 +63,41 @@ export function Dashboard() {
   if (!status) {
     return (
       <div className="p-6">
-        <p className="text-muted-foreground">Loading...</p>
+        <p className="text-muted-foreground">加载中...</p>
       </div>
     );
   }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-6 md:p-8">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <div>
+          <h1 className="text-3xl font-bold">运行脉搏</h1>
+          <p className="mt-1 text-sm text-muted-foreground">实时查看路由、智能体与项目会话的系统健康度。</p>
+        </div>
         <ConnectionStatus connected={connected} authenticated={authenticated} size="compact" />
       </div>
 
+      <Card className="border-primary/20 bg-gradient-to-r from-primary/18 via-card to-accent/22">
+        <CardContent className="flex flex-col gap-3 pt-6 md:flex-row md:items-end md:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">守护进程状态</p>
+            <p className="mt-1 text-3xl font-bold">{status.running ? "运行中" : "已停止"}</p>
+            <p className="mt-1 text-sm text-muted-foreground">运行时长 {formatUptime(status.uptime)} · 时区 {status.bossTimezone}</p>
+          </div>
+          <Badge variant={status.running ? "default" : "secondary"} className="w-fit">
+            {status.running ? "运行中" : "已停止"}
+          </Badge>
+        </CardContent>
+      </Card>
+
       {/* Stats row */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
-          { title: "Status", value: status.running ? "Running" : "Stopped" },
-          { title: "Uptime", value: formatUptime(status.uptime) },
-          { title: "Agents", value: String(status.agentCount) },
-          { title: "Timezone", value: status.bossTimezone },
+          { title: "状态", value: status.running ? "运行中" : "已停止" },
+          { title: "运行时长", value: formatUptime(status.uptime) },
+          { title: "智能体数量", value: String(status.agentCount) },
+          { title: "时区", value: status.bossTimezone },
         ].map((stat, i) => (
           <motion.div
             key={stat.title}
@@ -77,14 +106,14 @@ export function Dashboard() {
             animate="visible"
             variants={cardVariants}
           >
-            <Card>
+            <Card className="border-border/70 bg-card/90">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground">
                   {stat.title}
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-2xl font-bold">{stat.value}</p>
+                <p className="text-2xl font-bold tracking-tight">{stat.value}</p>
               </CardContent>
             </Card>
           </motion.div>
@@ -93,8 +122,8 @@ export function Dashboard() {
 
       {/* Agent cards */}
       <div>
-        <h2 className="text-lg font-semibold mb-3">Agents</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <h2 className="mb-3 text-xl font-semibold">智能体编队</h2>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           {status.agents.map((agent, i) => (
             <motion.div
               key={agent.name}
@@ -103,7 +132,7 @@ export function Dashboard() {
               animate="visible"
               variants={cardVariants}
             >
-              <Card>
+              <Card className="border-border/75 hover:border-primary/45 transition-colors">
                 <CardHeader className="pb-2">
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-base">{agent.name}</CardTitle>
@@ -112,7 +141,7 @@ export function Dashboard() {
                         className={`inline-block w-2 h-2 rounded-full ${healthColor(agent.health)}`}
                       />
                       <Badge variant={stateVariant(agent.state)}>
-                        {agent.state}
+                        {stateLabel(agent.state)}
                       </Badge>
                     </div>
                   </div>
@@ -120,38 +149,38 @@ export function Dashboard() {
                 <CardContent>
                   <div className="text-sm text-muted-foreground space-y-1">
                     <div className="flex justify-between">
-                      <span>Role</span>
+                      <span>角色</span>
                       <span className="font-medium text-foreground">
-                        {agent.role ?? "—"}
+                        {roleLabel(agent.role)}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Provider</span>
+                      <span>供应商</span>
                       <span className="font-medium text-foreground">
                         {agent.provider ?? "—"}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span>Pending</span>
+                      <span>待处理</span>
                       <span className="font-medium text-foreground">
                         {agent.pendingCount}
                       </span>
                     </div>
                     {agent.currentRun && (
                       <div className="flex justify-between">
-                        <span>Current Run</span>
+                        <span>当前运行</span>
                         <span className="font-mono text-xs text-foreground">{agent.currentRun.id.slice(0, 8)}</span>
                       </div>
                     )}
                     {agent.currentRun?.sessionTarget && (
                       <div className="flex justify-between">
-                        <span>Session Target</span>
+                        <span>会话目标</span>
                         <span className="font-mono text-xs text-foreground">{agent.currentRun.sessionTarget}</span>
                       </div>
                     )}
                     {agent.currentRun?.projectId && (
                       <div className="flex justify-between">
-                        <span>Project</span>
+                        <span>项目</span>
                         <span className="font-mono text-xs text-foreground">{agent.currentRun.projectId}</span>
                       </div>
                     )}

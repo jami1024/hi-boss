@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getChatSocketState,
   registerChatSocketListener,
@@ -13,6 +13,7 @@ export interface ChatMessage {
   text: string;
   status: string;
   createdAt: number;
+  clientMessageId?: string;
 }
 
 export interface AgentWsStatus {
@@ -66,10 +67,10 @@ export function useWebSocket({
   const [connected, setConnected] = useState(initialStateRef.current.connected);
   const [authenticated, setAuthenticated] = useState(initialStateRef.current.authenticated);
 
-  const sendMessage = useCallback((text: string) => {
-    if (!normalizedPrimaryAgentName) return;
-    if (!authenticated) return;
-    sendChatSocketMessage(normalizedPrimaryAgentName, text);
+  const sendMessage = useCallback((text: string, clientMessageId?: string): boolean => {
+    if (!normalizedPrimaryAgentName) return false;
+    if (!authenticated) return false;
+    return sendChatSocketMessage(normalizedPrimaryAgentName, text, clientMessageId);
   }, [normalizedPrimaryAgentName, authenticated]);
 
   useEffect(() => {

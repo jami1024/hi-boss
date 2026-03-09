@@ -15,6 +15,22 @@ function formatTime(ms: number | undefined): string {
 
 const PRIORITY_OPTIONS: ProjectTaskPriority[] = ["low", "normal", "high", "critical"];
 
+function priorityLabel(priority: ProjectTaskPriority): string {
+  if (priority === "low") return "低";
+  if (priority === "normal") return "普通";
+  if (priority === "high") return "高";
+  return "紧急";
+}
+
+function stateLabel(state: ProjectTask["state"]): string {
+  if (state === "created") return "已创建";
+  if (state === "planning") return "规划中";
+  if (state === "dispatched") return "已分派";
+  if (state === "executing") return "执行中";
+  if (state === "completed") return "已完成";
+  return "已取消";
+}
+
 export function ProjectTasksPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -77,15 +93,15 @@ export function ProjectTasksPage() {
   };
 
   if (loading) {
-    return <div className="p-6 text-sm text-muted-foreground">Loading project tasks...</div>;
+    return <div className="p-6 text-sm text-muted-foreground">加载项目任务中...</div>;
   }
 
   if (error && !project) {
     return (
       <div className="p-6 space-y-4">
-        <p className="text-destructive">Error: {error}</p>
+        <p className="text-destructive">错误：{error}</p>
         <Button variant="outline" onClick={() => navigate(-1)}>
-          Back
+          返回
         </Button>
       </div>
     );
@@ -96,32 +112,32 @@ export function ProjectTasksPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={() => navigate(`/projects/${encodeURIComponent(id ?? "")}`)}>
-            &larr; Project
+            &larr; 项目
           </Button>
-          <h1 className="text-2xl font-bold">{project?.name ?? id} Tasks</h1>
+          <h1 className="text-2xl font-bold">{project?.name ?? id} · 任务</h1>
         </div>
         <Button variant="outline" size="sm" onClick={() => void load()}>
-          Refresh
+          刷新
         </Button>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Create Task</CardTitle>
+          <CardTitle className="text-base">创建任务</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="taskTitle">Title</Label>
+              <Label htmlFor="taskTitle">标题</Label>
               <Input
                 id="taskTitle"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="What should be done?"
+                placeholder="要完成什么？"
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="taskPriority">Priority</Label>
+              <Label htmlFor="taskPriority">优先级</Label>
               <Select value={priority} onValueChange={(value) => setPriority(value as ProjectTaskPriority)}>
                 <SelectTrigger id="taskPriority">
                   <SelectValue />
@@ -129,25 +145,25 @@ export function ProjectTasksPage() {
                 <SelectContent>
                   {PRIORITY_OPTIONS.map((item) => (
                     <SelectItem key={item} value={item}>
-                      {item}
+                      {priorityLabel(item)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2 md:col-span-2">
-              <Label htmlFor="taskText">Initial Brief (optional)</Label>
+              <Label htmlFor="taskText">初始说明（可选）</Label>
               <Input
                 id="taskText"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                placeholder="Extra context for speaker auto-dispatch"
+                placeholder="给发言智能体自动分派的补充上下文"
               />
             </div>
           </div>
           <div className="flex items-center gap-3">
             <Button onClick={handleCreateTask} disabled={saving || !title.trim()}>
-              {saving ? "Creating..." : "Create & Dispatch"}
+              {saving ? "创建中..." : "创建并分派"}
             </Button>
             {error && <span className="text-sm text-destructive">{error}</span>}
           </div>
@@ -156,11 +172,11 @@ export function ProjectTasksPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Task List</CardTitle>
+          <CardTitle className="text-base">任务列表</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {sortedTasks.length === 0 && (
-            <p className="text-sm text-muted-foreground">No tasks yet.</p>
+            <p className="text-sm text-muted-foreground">暂无任务。</p>
           )}
           {sortedTasks.map((task) => (
             <div
@@ -174,14 +190,14 @@ export function ProjectTasksPage() {
                     {task.id}
                   </Badge>
                   <Badge variant="secondary" className="text-xs">
-                    {task.state}
+                    {stateLabel(task.state)}
                   </Badge>
                   <Badge variant="outline" className="text-xs">
-                    {task.priority}
+                    {priorityLabel(task.priority)}
                   </Badge>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Assignee: {task.assignee ?? "—"} · Updated: {formatTime(task.updatedAt)}
+                  执行者：{task.assignee ?? "—"} · 更新时间：{formatTime(task.updatedAt)}
                 </p>
               </div>
               <Button
@@ -189,7 +205,7 @@ export function ProjectTasksPage() {
                 size="sm"
                 onClick={() => navigate(`/projects/${encodeURIComponent(id ?? "")}/tasks/${encodeURIComponent(task.id)}`)}
               >
-                Activity
+                活动
               </Button>
             </div>
           ))}

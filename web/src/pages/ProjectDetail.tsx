@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
@@ -20,8 +20,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { RemoteSkillManager } from "@/components/RemoteSkillManager";
+import { ProjectAgentPresenceBoard } from "@/components/project/ProjectAgentPresenceBoard";
+import { ProjectLeaderManager } from "@/components/project/ProjectLeaderManager";
+import { ProjectAgentStatusTimeline } from "@/components/project/ProjectAgentStatusTimeline";
+import type { ProjectAgentRuntimeSnapshot } from "@/components/project/project-agent-types";
+import { useDaemonStatusFeed } from "@/hooks/useDaemonStatusFeed";
+import { useProjectAgentTimeline } from "@/hooks/useProjectAgentTimeline";
 
 function formatTime(ms: number | null | undefined): string {
   if (!ms) return "—";
@@ -52,6 +57,32 @@ export function ProjectDetailPage() {
   const [newLeaderName, setNewLeaderName] = useState("");
   const [newLeaderCaps, setNewLeaderCaps] = useState("");
   const [addingLeader, setAddingLeader] = useState(false);
+
+  const memberAgentNames = useMemo(() => {
+    if (!project) return [];
+    return [project.speakerAgent, ...(project.leaders ?? []).map((leader) => leader.agentName)];
+  }, [project]);
+
+  const { status: daemonStatus } = useDaemonStatusFeed({
+    pollMs: 7000,
+    agentNamesOverride: memberAgentNames,
+  });
+
+  const runtimeByName = useMemo(() => {
+    const map: Record<string, ProjectAgentRuntimeSnapshot> = {};
+    for (const agent of daemonStatus?.agents ?? []) {
+      map[agent.name] = {
+        state: agent.state,
+        health: agent.health,
+        pendingCount: agent.pendingCount,
+        projectId: agent.currentRun?.projectId,
+        sessionTarget: agent.currentRun?.sessionTarget,
+      };
+    }
+    return map;
+  }, [daemonStatus]);
+
+  const agentTimeline = useProjectAgentTimeline(memberAgentNames, runtimeByName, 48);
 
   const loadProject = useCallback(async () => {
     if (!id) return;
@@ -208,9 +239,9 @@ export function ProjectDetailPage() {
   if (error) {
     return (
       <div className="p-6">
-        <p className="text-destructive">Error: {error}</p>
+        <p className="text-destructive">错误：{error}</p>
         <Button variant="outline" className="mt-4" onClick={() => navigate("/projects")}>
-          Back to Projects
+          返回项目列表
         </Button>
       </div>
     );
@@ -219,7 +250,7 @@ export function ProjectDetailPage() {
   if (!project) {
     return (
       <div className="p-6">
-        <p className="text-muted-foreground">Loading...</p>
+        <p className="text-muted-foreground">加载中...</p>
       </div>
     );
   }
@@ -235,7 +266,7 @@ export function ProjectDetailPage() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={() => navigate("/projects")}>
-            &larr; Back
+            &larr; 返回
           </Button>
           <h1 className="text-2xl font-bold">{project.name}</h1>
           <Badge variant="outline" className="text-xs font-mono">
@@ -249,28 +280,28 @@ export function ProjectDetailPage() {
             onClick={handleRefreshSpeakerSession}
             disabled={refreshingSpeakerSession}
           >
-            {refreshingSpeakerSession ? "Refreshing..." : "Refresh Speaker Session"}
+            {refreshingSpeakerSession ? "刷新中..." : "刷新发言智能体会话"}
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={() => navigate(`/projects/${encodeURIComponent(project.id)}/chat`)}
           >
-            Chat
+            聊天
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={() => navigate(`/projects/${encodeURIComponent(project.id)}/tasks`)}
           >
-            Tasks
+            任务
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={() => navigate(`/projects/${encodeURIComponent(project.id)}/memory`)}
           >
-            Memory
+            记忆
           </Button>
         </div>
       </div>
@@ -281,7 +312,7 @@ export function ProjectDetailPage() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Speaker
+                发言智能体
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -291,7 +322,7 @@ export function ProjectDetailPage() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Leaders
+                领队数量
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -306,7 +337,7 @@ export function ProjectDetailPage() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Created
+                创建时间
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -316,7 +347,7 @@ export function ProjectDetailPage() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Updated
+                更新时间
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -329,30 +360,30 @@ export function ProjectDetailPage() {
       {/* Edit Form */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Project Settings</CardTitle>
+          <CardTitle className="text-base">项目设置</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="name">Name</Label>
+              <Label htmlFor="name">名称</Label>
               <Input
                 id="name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Project name"
+                placeholder="项目名称"
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="root">Root Path</Label>
+              <Label htmlFor="root">项目路径</Label>
               <Input
                 id="root"
                 value={root}
                 onChange={(e) => setRoot(e.target.value)}
-                placeholder="/path/to/project"
+                placeholder="/Users/你的用户名/projects/示例项目"
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="speaker">Speaker Agent</Label>
+              <Label htmlFor="speaker">发言智能体</Label>
               {agents.length > 0 ? (
                 <Select value={speakerAgent} onValueChange={setSpeakerAgent}>
                   <SelectTrigger>
@@ -371,30 +402,30 @@ export function ProjectDetailPage() {
                   id="speaker"
                   value={speakerAgent}
                   onChange={(e) => setSpeakerAgent(e.target.value)}
-                  placeholder="Agent name"
+                  placeholder="智能体名称"
                 />
               )}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="channel">Main Group Channel</Label>
+              <Label htmlFor="channel">主群频道</Label>
               <Input
                 id="channel"
                 value={mainGroupChannel}
                 onChange={(e) => setMainGroupChannel(e.target.value)}
-                placeholder="e.g. channel:telegram:12345"
+                placeholder="例如：channel:telegram:12345"
               />
               <p className="text-xs text-muted-foreground">
-                Leave empty to clear.
+                留空表示清空。
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
             <Button onClick={handleSave} disabled={saving}>
-              {saving ? "Saving..." : "Save Changes"}
+              {saving ? "保存中..." : "保存变更"}
             </Button>
             {saveSuccess && (
-              <span className="text-sm text-green-600">Saved successfully</span>
+              <span className="text-sm text-green-600">保存成功</span>
             )}
             {saveError && (
               <span className="text-sm text-destructive">{saveError}</span>
@@ -403,107 +434,36 @@ export function ProjectDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Leaders */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base">Leaders</CardTitle>
-            <Badge variant="outline">
-              {leaders.filter((l) => l.active).length} active
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {leaders.length === 0 && (
-            <p className="text-sm text-muted-foreground">No leaders assigned yet.</p>
-          )}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
+        <div className="xl:col-span-3">
+          <ProjectAgentPresenceBoard
+            speakerAgent={project.speakerAgent}
+            leaders={leaders}
+            statusByName={runtimeByName}
+            onOpenAgent={(agentName) => navigate(`/agents/${encodeURIComponent(agentName)}`)}
+          />
+        </div>
+        <div className="xl:col-span-2">
+          <ProjectAgentStatusTimeline agentNames={memberAgentNames} events={agentTimeline} />
+        </div>
+      </div>
 
-          {leaders.map((leader) => (
-            <div
-              key={leader.agentName}
-              className="flex items-center justify-between border rounded-lg p-3"
-            >
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">{leader.agentName}</span>
-                  <Badge
-                    variant={leader.active ? "default" : "secondary"}
-                    className="text-xs"
-                  >
-                    {leader.active ? "Active" : "Inactive"}
-                  </Badge>
-                </div>
-                {leader.capabilities.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {leader.capabilities.map((cap) => (
-                      <Badge key={cap} variant="outline" className="text-xs">
-                        {cap}
-                      </Badge>
-                    ))}
-                  </div>
-                )}
-                <p className="text-xs text-muted-foreground">
-                  Updated: {formatTime(leader.updatedAt)}
-                </p>
-              </div>
-              <Switch
-                checked={leader.active}
-                onCheckedChange={() => handleToggleLeader(leader)}
-              />
-            </div>
-          ))}
-
-          {/* Add Leader */}
-          <div className="border-t pt-4">
-            <p className="text-sm font-medium mb-3">Add Leader</p>
-            <div className="flex items-end gap-3">
-              <div className="space-y-2 flex-1">
-                <Label htmlFor="newLeader">Agent</Label>
-                {availableAgents.length > 0 ? (
-                  <Select value={newLeaderName} onValueChange={setNewLeaderName}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select agent..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {availableAgents.map((a) => (
-                        <SelectItem key={a.name} value={a.name}>
-                          {a.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <Input
-                    id="newLeader"
-                    value={newLeaderName}
-                    onChange={(e) => setNewLeaderName(e.target.value)}
-                    placeholder="Agent name"
-                  />
-                )}
-              </div>
-              <div className="space-y-2 flex-1">
-                <Label htmlFor="newCaps">Capabilities</Label>
-                <Input
-                  id="newCaps"
-                  value={newLeaderCaps}
-                  onChange={(e) => setNewLeaderCaps(e.target.value)}
-                  placeholder="cap1, cap2, ..."
-                />
-              </div>
-              <Button
-                onClick={handleAddLeader}
-                disabled={addingLeader || !newLeaderName.trim()}
-              >
-                {addingLeader ? "Adding..." : "Add"}
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <ProjectLeaderManager
+        leaders={leaders}
+        availableAgents={availableAgents}
+        newLeaderName={newLeaderName}
+        newLeaderCaps={newLeaderCaps}
+        addingLeader={addingLeader}
+        onNewLeaderNameChange={setNewLeaderName}
+        onNewLeaderCapsChange={setNewLeaderCaps}
+        onAddLeader={handleAddLeader}
+        onToggleLeader={handleToggleLeader}
+        formatTime={formatTime}
+      />
 
       <RemoteSkillManager
-        title="Project Remote Skills"
-        description={`Installed under ${project.root}/.hiboss/skills`}
+        title="项目远程技能"
+        description={`安装目录：${project.root}/.hiboss/skills`}
         loading={remoteSkillsLoading}
         error={remoteSkillsError}
         skills={remoteSkills}

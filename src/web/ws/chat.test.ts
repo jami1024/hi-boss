@@ -5,7 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import { HiBossDatabase } from "../../daemon/db/database.js";
 import type { DaemonContext, Principal } from "../../daemon/rpc/context.js";
-import { buildAgentWsStatus } from "./chat.js";
+import type { Envelope } from "../../envelope/types.js";
+import { buildAgentWsStatus, buildWsEnvelopePayload } from "./chat.js";
 
 function withTempDb(run: (db: HiBossDatabase) => Promise<void> | void): Promise<void> {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "hiboss-web-ws-test-"));
@@ -86,4 +87,37 @@ test("buildAgentWsStatus includes session target and project id for project-scop
     assert.equal(status?.currentRun?.sessionTarget, "nex:repo.a");
     assert.equal(status?.currentRun?.projectId, "repo.a");
   });
+});
+
+test("buildWsEnvelopePayload includes clientMessageId when metadata contains it", () => {
+  const envelope: Envelope = {
+    id: "env-1",
+    from: "channel:web:boss",
+    to: "agent:nex",
+    fromBoss: true,
+    content: { text: "hello" },
+    status: "pending",
+    createdAt: 123,
+    metadata: { clientMessageId: "client-123" },
+  };
+
+  const payload = buildWsEnvelopePayload(envelope);
+  assert.equal(payload.clientMessageId, "client-123");
+  assert.equal(payload.text, "hello");
+});
+
+test("buildWsEnvelopePayload omits clientMessageId for blank metadata value", () => {
+  const envelope: Envelope = {
+    id: "env-2",
+    from: "channel:web:boss",
+    to: "agent:nex",
+    fromBoss: true,
+    content: { text: "hello" },
+    status: "pending",
+    createdAt: 456,
+    metadata: { clientMessageId: "   " },
+  };
+
+  const payload = buildWsEnvelopePayload(envelope);
+  assert.equal("clientMessageId" in payload, false);
 });

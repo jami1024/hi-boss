@@ -10,7 +10,7 @@ export function LoginPage() {
 
   const handleLogin = async () => {
     if (!token.trim()) {
-      setError("Please enter a token");
+      setError("请输入令牌");
       return;
     }
 
@@ -22,7 +22,7 @@ export function LoginPage() {
       await api.ping();
       window.location.reload();
     } catch {
-      setError("Invalid token or daemon not running");
+      setError("令牌无效，或守护进程未启动");
       setToken("");
     } finally {
       setLoading(false);
@@ -35,14 +35,14 @@ export function LoginPage() {
         <CardHeader>
           <CardTitle className="text-center text-2xl">Hi-Boss</CardTitle>
           <p className="text-center text-muted-foreground text-sm">
-            Enter your boss token to continue
+            请输入 Boss 令牌继续使用
           </p>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
             <input
               type="password"
-              placeholder="Boss Token"
+              placeholder="Boss 令牌"
               value={token}
               onChange={(e) => setTokenValue(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleLogin()}
@@ -56,7 +56,7 @@ export function LoginPage() {
               disabled={loading}
               className="w-full"
             >
-              {loading ? "Connecting..." : "Connect"}
+              {loading ? "连接中..." : "连接"}
             </Button>
           </div>
         </CardContent>

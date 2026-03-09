@@ -21,12 +21,12 @@ function formatTime(ms: number | undefined): string {
 
 function formatRefreshMessage(refresh?: RemoteSkillRefreshSummary): string {
   if (!refresh || refresh.count <= 0) {
-    return "Saved project memory.";
+    return "项目记忆已保存。";
   }
   const targets = refresh.requested
     .map((entry) => (entry.projectId ? `${entry.agentName}:${entry.projectId}` : entry.agentName))
     .join(", ");
-  return `Saved and requested ${refresh.count} session refresh(es): ${targets}`;
+  return `保存成功，并触发 ${refresh.count} 个会话刷新：${targets}`;
 }
 
 export function ProjectMemoryPage() {
@@ -153,11 +153,11 @@ export function ProjectMemoryPage() {
     if (!id) return;
     const name = activeEntryName.trim();
     if (!name) {
-      setError("Entry name is required");
+      setError("条目名称不能为空");
       return;
     }
     if (!name.endsWith(".md")) {
-      setError("Entry name must end with .md");
+      setError("条目名称必须以 .md 结尾");
       return;
     }
 
@@ -202,14 +202,14 @@ export function ProjectMemoryPage() {
   };
 
   if (loading) {
-    return <div className="p-6 text-sm text-muted-foreground">Loading project memory...</div>;
+    return <div className="p-6 text-sm text-muted-foreground">加载项目记忆中...</div>;
   }
 
   if (!project) {
     return (
       <div className="p-6 space-y-4">
-        <p className="text-destructive">{error || "Project not found"}</p>
-        <Button variant="outline" onClick={() => navigate("/projects")}>Back</Button>
+        <p className="text-destructive">{error || "未找到项目"}</p>
+        <Button variant="outline" onClick={() => navigate("/projects")}>返回</Button>
       </div>
     );
   }
@@ -219,38 +219,38 @@ export function ProjectMemoryPage() {
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={() => navigate(`/projects/${encodeURIComponent(project.id)}`)}>
-            &larr; Project
+            &larr; 项目
           </Button>
-          <h1 className="text-2xl font-bold">{project.name} Memory</h1>
+          <h1 className="text-2xl font-bold">{project.name} · 项目记忆</h1>
           <Badge variant="outline" className="font-mono text-xs">{project.id}</Badge>
         </div>
-        <Button variant="outline" size="sm" onClick={() => void load()}>Refresh</Button>
+        <Button variant="outline" size="sm" onClick={() => void load()}>刷新</Button>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-[320px,1fr] gap-6">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Entries</CardTitle>
+            <CardTitle className="text-base">条目列表</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="space-y-2">
-              <Label htmlFor="memoryEntryFilter">Search Entries</Label>
+              <Label htmlFor="memoryEntryFilter">搜索条目</Label>
               <Input
                 id="memoryEntryFilter"
                 value={entryFilter}
                 onChange={(e) => setEntryFilter(e.target.value)}
-                placeholder="Search by name..."
+                placeholder="按名称搜索..."
               />
               <p className="text-xs text-muted-foreground">
-                Showing {filteredEntries.length} of {sortedEntries.length}
+                显示 {filteredEntries.length} / {sortedEntries.length}
               </p>
             </div>
 
             {sortedEntries.length === 0 && (
-              <p className="text-sm text-muted-foreground">No project memory entries yet.</p>
+              <p className="text-sm text-muted-foreground">还没有项目记忆条目。</p>
             )}
             {sortedEntries.length > 0 && filteredEntries.length === 0 && (
-              <p className="text-sm text-muted-foreground">No entries match your search.</p>
+              <p className="text-sm text-muted-foreground">没有匹配搜索条件的条目。</p>
             )}
             {filteredEntries.map((entry) => (
               <button
@@ -265,14 +265,14 @@ export function ProjectMemoryPage() {
             ))}
 
             <div className="border-t pt-3 space-y-2">
-              <Label htmlFor="memoryDraftTitle">Draft Title</Label>
+              <Label htmlFor="memoryDraftTitle">草稿标题</Label>
               <Input
                 id="memoryDraftTitle"
                 value={draftTitle}
                 onChange={(e) => setDraftTitle(e.target.value)}
                 placeholder="decision-record"
               />
-              <Label htmlFor="newMemoryEntry">New Entry</Label>
+              <Label htmlFor="newMemoryEntry">新建条目</Label>
               <Input
                 id="newMemoryEntry"
                 value={newEntryName}
@@ -281,16 +281,16 @@ export function ProjectMemoryPage() {
               />
               <div className="flex items-center gap-2 flex-wrap">
                 <Button variant="outline" size="sm" onClick={handleSuggestVersionedName}>
-                  Suggest Versioned Name
+                  生成版本化名称
                 </Button>
                 <Button variant="outline" size="sm" onClick={handleCreateDraft}>
-                  Start Draft
+                  开始草稿
                 </Button>
               </div>
             </div>
 
             <div className="border-t pt-3 space-y-2">
-              <p className="text-sm font-medium">Quick Templates</p>
+              <p className="text-sm font-medium">快捷模板</p>
               {PROJECT_MEMORY_TEMPLATES.map((template) => (
                 <div key={template.id} className="border rounded-md p-2 space-y-2">
                   <div>
@@ -302,7 +302,7 @@ export function ProjectMemoryPage() {
                     size="sm"
                     onClick={() => handleUseTemplate(template.id)}
                   >
-                    Use Template
+                    使用模板
                   </Button>
                 </div>
               ))}
@@ -312,11 +312,11 @@ export function ProjectMemoryPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Editor</CardTitle>
+            <CardTitle className="text-base">编辑器</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="space-y-2">
-              <Label htmlFor="memoryEntryName">Entry Name</Label>
+              <Label htmlFor="memoryEntryName">条目名称</Label>
               <Input
                 id="memoryEntryName"
                 value={activeEntryName}
@@ -330,28 +330,28 @@ export function ProjectMemoryPage() {
                 placeholder="2026-03-08-notes-v1.md"
               />
               <p className="text-xs text-muted-foreground">
-                Tip: use date + topic + version, e.g. <code>2026-03-08-decision-record-v1.md</code>
+                建议：使用“日期 + 主题 + 版本”，例如 <code>2026-03-08-decision-record-v1.md</code>
               </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="memoryContent">Content</Label>
+              <Label htmlFor="memoryContent">内容</Label>
               <Textarea
                 id="memoryContent"
                 className="min-h-[320px] font-mono text-sm"
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                placeholder="Write project memory notes here..."
+                placeholder="在这里记录项目记忆..."
               />
             </div>
 
             {hasUnsavedChanges && (
               <div className="space-y-2 border rounded-md p-3 bg-muted/30">
                 <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm font-medium">Unsaved Diff Preview</p>
+                  <p className="text-sm font-medium">未保存差异预览</p>
                   <div className="flex items-center gap-2 text-xs">
                     <Badge variant="secondary">+{diffResult.added}</Badge>
                     <Badge variant="outline">-{diffResult.removed}</Badge>
-                    {diffResult.truncated && <Badge variant="outline">truncated</Badge>}
+                    {diffResult.truncated && <Badge variant="outline">已截断</Badge>}
                   </div>
                 </div>
                 <div className="max-h-64 overflow-auto border rounded bg-background">
@@ -377,14 +377,14 @@ export function ProjectMemoryPage() {
 
             <div className="flex items-center gap-2">
               <Button onClick={handleSave} disabled={saving || entryLoading}>
-                {saving ? "Saving..." : "Save Entry"}
+                {saving ? "保存中..." : "保存条目"}
               </Button>
               <Button
                 variant="destructive"
                 onClick={handleDelete}
                 disabled={deleting || !selectedName}
               >
-                {deleting ? "Deleting..." : "Delete Entry"}
+                {deleting ? "删除中..." : "删除条目"}
               </Button>
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
