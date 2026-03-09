@@ -133,7 +133,7 @@ function registerProjectFixture(db: HiBossDatabase, tempDir: string): { speaker:
   return { speaker, projectId };
 }
 
-test("sendProjectChatMessage creates project-scoped envelope to project speaker", async () => {
+test("sendProjectChatMessage forwards to speaker with intent hint", async () => {
   await withTempDb(async (db, tempDir) => {
     db.setBossToken("boss-token");
     const { speaker, projectId } = registerProjectFixture(db, tempDir);
@@ -145,21 +145,59 @@ test("sendProjectChatMessage creates project-scoped envelope to project speaker"
         token: "boss-token",
         res: mock.res,
         id: projectId,
-        body: { text: "Start implementation" },
+        body: { text: "请帮我实现登录功能" },
       })
     );
 
     assert.equal(mock.getStatus(), 200);
-    const body = mock.getBody() as { id: string };
+    const body = mock.getBody() as { id: string; intentHint: string };
     assert.ok(body.id);
+    assert.equal(body.intentHint, "requirement");
+
     const envelope = db.getEnvelopeById(body.id);
     assert.equal(envelope?.from, "channel:web:boss");
     assert.equal(envelope?.to, `agent:${speaker.name}`);
     assert.equal((envelope?.metadata as Record<string, unknown> | undefined)?.projectId, projectId);
+    assert.equal((envelope?.metadata as Record<string, unknown> | undefined)?.intentHint, "requirement");
+
+    const tasks = db.listProjectTasks({ projectId, limit: 50 });
+    assert.equal(tasks.length, 0);
   });
 });
 
-test("listProjectChatMessages returns only project-scoped speaker/boss messages", async () => {
+test("sendProjectChatMessage keeps simple Q&A as non-task intent", async () => {
+  await withTempDb(async (db, tempDir) => {
+    db.setBossToken("boss-token");
+    const { speaker, projectId } = registerProjectFixture(db, tempDir);
+    const handlers = createProjectHandlers(buildDaemonContext(db));
+    const mock = createMockResponse();
+
+    await handlers.sendProjectChatMessage(
+      createRouteContext({
+        token: "boss-token",
+        res: mock.res,
+        id: projectId,
+        body: { text: "这个项目是做什么的？" },
+      })
+    );
+
+    assert.equal(mock.getStatus(), 200);
+    const body = mock.getBody() as { id: string; intentHint: string; taskId?: string };
+    assert.ok(body.id);
+    assert.equal(body.intentHint, "qa");
+    assert.equal(body.taskId, undefined);
+
+    const envelope = db.getEnvelopeById(body.id);
+    assert.equal(envelope?.to, `agent:${speaker.name}`);
+    assert.equal((envelope?.metadata as Record<string, unknown> | undefined)?.intentHint, "qa");
+    assert.equal((envelope?.metadata as Record<string, unknown> | undefined)?.taskId, undefined);
+
+    const tasks = db.listProjectTasks({ projectId, limit: 50 });
+    assert.equal(tasks.length, 0);
+  });
+});
+
+test("listProjectChatMessages returns project-scoped inter-agent messages", async () => {
   await withTempDb(async (db, tempDir) => {
     db.setBossToken("boss-token");
     const { speaker, projectId } = registerProjectFixture(db, tempDir);
@@ -185,6 +223,12 @@ test("listProjectChatMessages returns only project-scoped speaker/boss messages"
       content: { text: "other project" },
       metadata: { source: "web", projectId: "repo.other" },
     });
+    db.createEnvelope({
+      from: "agent:worker-agent",
+      to: "agent:lead-agent",
+      content: { text: "worker to lead" },
+      metadata: { projectId },
+    });
 
     const handlers = createProjectHandlers(buildDaemonContext(db));
     const mock = createMockResponse();
@@ -208,7 +252,7 @@ test("listProjectChatMessages returns only project-scoped speaker/boss messages"
     assert.deepEqual(body.project.availableLeaders, ["nex"]);
     assert.deepEqual(
       body.messages.map((msg) => msg.text).sort(),
-      ["project inbound", "project outbound"]
+      ["project inbound", "project outbound", "worker to lead"]
     );
   });
 });

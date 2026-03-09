@@ -3,31 +3,13 @@
  */
 
 import path from "node:path";
-import type {
-  RpcMethodRegistry,
-  EnvelopeSendParams,
-  EnvelopeListParams,
-  EnvelopeThreadParams,
-  EnvelopeThreadResult,
-} from "../ipc/types.js";
-import { RPC_ERRORS } from "../ipc/types.js";
-import type { DaemonContext } from "./context.js";
-import { requireToken, rpcError } from "./context.js";
 import { formatAgentAddress, parseAddress } from "../../adapters/types.js";
-import { parseDateTimeInputToUnixMsInTimeZone } from "../../shared/time.js";
-import { BACKGROUND_AGENT_NAME } from "../../shared/defaults.js";
+import type { Envelope } from "../../envelope/types.js";
 import { parseAgentRoleFromMetadata } from "../../shared/agent-role.js";
 import { logEvent } from "../../shared/daemon-log.js";
-import { resolveEnvelopeIdInput } from "./resolve-envelope-id.js";
-import type { Envelope } from "../../envelope/types.js";
-import {
-  deriveProjectIdFromRoot,
-  inferMainGroupChannel,
-  inferRequirementGroupChannel,
-  normalizeWorkspacePath,
-  parseCapabilityHint,
-  parseProjectRootHint,
-} from "./work-item-orchestration.js";
+import { BACKGROUND_AGENT_NAME } from "../../shared/defaults.js";
+import { deriveProjectTaskTitleFromMessage } from "../../shared/project-intent.js";
+import { parseDateTimeInputToUnixMsInTimeZone } from "../../shared/time.js";
 import {
   canRoleSetWorkItemState,
   canStartWorkItemWithState,
@@ -40,6 +22,24 @@ import {
   resolveWorkItemChannelPolicy,
   type WorkItemEnvelopeFields,
 } from "../../shared/work-item.js";
+import {
+  RPC_ERRORS,
+  type EnvelopeListParams,
+  type EnvelopeSendParams,
+  type EnvelopeThreadParams,
+  type EnvelopeThreadResult,
+  type RpcMethodRegistry,
+} from "../ipc/types.js";
+import { requireToken, rpcError, type DaemonContext } from "./context.js";
+import { resolveEnvelopeIdInput } from "./resolve-envelope-id.js";
+import {
+  deriveProjectIdFromRoot,
+  inferMainGroupChannel,
+  inferRequirementGroupChannel,
+  normalizeWorkspacePath,
+  parseCapabilityHint,
+  parseProjectRootHint,
+} from "./work-item-orchestration.js";
 
 function parseEnvelopeListTimeBoundary(params: {
   raw: unknown;
@@ -213,7 +213,7 @@ export function createEnvelopeHandlers(ctx: DaemonContext): RpcMethodRegistry {
     })();
 
     let from: string;
-    let fromBoss = false;
+    const fromBoss = false;
     const metadata: Record<string, unknown> = {};
 
     if (p.from !== undefined || p.fromBoss !== undefined || p.fromName !== undefined) {
@@ -611,13 +611,44 @@ export function createEnvelopeHandlers(ctx: DaemonContext): RpcMethodRegistry {
       metadata.taskId = effectiveTaskId;
     }
     const inProjectScopedRunContext = Boolean(projectIdFromRunContext);
+    const senderRole = getSenderRole();
+    const destinationAgent =
+      destination.type === "agent" && destination.agentName.toLowerCase() !== BACKGROUND_AGENT_NAME
+        ? ctx.db.getAgentByNameCaseInsensitive(destination.agentName)
+        : null;
+    const destinationAgentRole = destinationAgent
+      ? parseAgentRoleFromMetadata(destinationAgent.metadata)
+      : undefined;
+    const autoTaskProject =
+      inProjectScopedRunContext && effectiveProjectId
+        ? ctx.db.getProjectById(effectiveProjectId)
+        : null;
 
-    if (effectiveTaskId && destination.type === "agent" && getSenderRole() === "speaker") {
-      const destinationAgent =
-        destination.agentName.toLowerCase() === BACKGROUND_AGENT_NAME
-          ? null
-          : ctx.db.getAgentByNameCaseInsensitive(destination.agentName);
-      if (destinationAgent && parseAgentRoleFromMetadata(destinationAgent.metadata) === "leader") {
+    if (
+      !effectiveTaskId &&
+      senderRole === "speaker" &&
+      destination.type === "agent" &&
+      destinationAgent &&
+      destinationAgentRole === "leader" &&
+      autoTaskProject
+    ) {
+      const createdTask = ctx.db.updateProjectTaskState({
+        taskId: ctx.db.createProjectTask({
+          projectId: autoTaskProject.id,
+          title: deriveProjectTaskTitleFromMessage(p.text ?? ""),
+          actor: agent.name,
+          reason: "speaker-auto-task-from-dispatch",
+        }).id,
+        state: "planning",
+        actor: agent.name,
+        reason: "speaker-auto-task-from-dispatch",
+      });
+      effectiveTaskId = createdTask.id;
+      metadata.taskId = createdTask.id;
+    }
+
+    if (effectiveTaskId && senderRole === "speaker" && destination.type === "agent") {
+      if (destinationAgent && destinationAgentRole === "leader") {
         const task = ctx.db.getProjectTaskById(effectiveTaskId);
         if (task && task.state === "planning") {
           ctx.db.updateProjectTaskState({
@@ -668,7 +699,7 @@ export function createEnvelopeHandlers(ctx: DaemonContext): RpcMethodRegistry {
           mainGroupChannel: effectiveMainGroupChannel,
         });
 
-        if (!inProjectScopedRunContext && effectiveOrchestratorAgent !== agent.name && getSenderRole() === "leader") {
+        if (!inProjectScopedRunContext && effectiveOrchestratorAgent !== agent.name && senderRole === "leader") {
           ctx.db.upsertProjectLeader({
             projectId: effectiveProjectId,
             agentName: agent.name,
@@ -678,12 +709,8 @@ export function createEnvelopeHandlers(ctx: DaemonContext): RpcMethodRegistry {
         }
       }
 
-      if (destination.type === "agent" && getSenderRole() === "speaker") {
-        const destinationAgent =
-          destination.agentName.toLowerCase() === BACKGROUND_AGENT_NAME
-            ? null
-            : ctx.db.getAgentByNameCaseInsensitive(destination.agentName);
-        if (destinationAgent && parseAgentRoleFromMetadata(destinationAgent.metadata) === "leader") {
+      if (destination.type === "agent" && senderRole === "speaker") {
+        if (destinationAgent && destinationAgentRole === "leader") {
           ctx.db.upsertWorkItemSpecialistAssignment({
             workItemId: workItemFields.workItemId,
             agentName: destinationAgent.name,

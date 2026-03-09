@@ -162,3 +162,46 @@ for (const scenario of [
     assert.deepEqual(db.statusUpdates, [{ id: outgoing.id, status: "done" }]);
   });
 }
+
+test("channel:web:boss delivery succeeds without loaded adapter", async () => {
+  const db = new FakeDb("web", "web-builtin");
+  const done: string[] = [];
+
+  const router = new MessageRouter(db as unknown as HiBossDatabase, {
+    onEnvelopeDone: async (env) => {
+      done.push(env.id);
+    },
+  });
+
+  const outgoing = makeEnvelope({
+    id: "web-child-1",
+    from: "agent:lead-agent",
+    to: "channel:web:boss",
+  });
+
+  await router.deliverEnvelope(outgoing);
+
+  assert.deepEqual(db.statusUpdates, [{ id: "web-child-1", status: "done" }]);
+  assert.deepEqual(done, ["web-child-1"]);
+});
+
+test("channel:web:<non-boss> still fails when no web adapter is loaded", async () => {
+  const db = new FakeDb("web", "web-builtin");
+  const done: string[] = [];
+
+  const router = new MessageRouter(db as unknown as HiBossDatabase, {
+    onEnvelopeDone: async (env) => {
+      done.push(env.id);
+    },
+  });
+
+  const outgoing = makeEnvelope({
+    id: "web-child-2",
+    from: "agent:lead-agent",
+    to: "channel:web:someone-else",
+  });
+
+  await assert.rejects(() => router.deliverEnvelope(outgoing), /adapter token is not loaded/);
+  assert.deepEqual(db.statusUpdates, [{ id: "web-child-2", status: "done" }]);
+  assert.deepEqual(done, []);
+});

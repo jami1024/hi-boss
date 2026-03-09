@@ -2,33 +2,34 @@
  * Agent executor for running agent sessions with direct CLI invocation.
  */
 import type { ChildProcess } from "node:child_process";
-import type { Agent } from "./types.js";
+import { formatAgentAddress } from "../adapters/types.js";
 import type { HiBossDatabase } from "../daemon/db/database.js";
-import { getHiBossDir } from "./home-setup.js";
-import { buildTurnInput } from "./turn-input.js";
-import {
-  parseSessionPolicyConfig,
-} from "../shared/session-policy.js";
+import type { CreateEnvelopeInput, Envelope } from "../envelope/types.js";
 import { parseAgentRoleFromMetadata } from "../shared/agent-role.js";
 import { errorMessage, logEvent } from "../shared/daemon-log.js";
+import { parseSessionPolicyConfig } from "../shared/session-policy.js";
+import { countDuePendingEnvelopesForAgent } from "./executor-db.js";
+import { getOrCreateAgentSession } from "./executor-session.js";
 import {
   queueAgentTask,
   type AgentSession,
   type SessionRefreshRequest,
 } from "./executor-support.js";
-import { writePersistedAgentSession } from "./persisted-session.js";
 import type { AgentRunTrigger } from "./executor-triggers.js";
 import { getTriggerFields } from "./executor-triggers.js";
-import { countDuePendingEnvelopesForAgent } from "./executor-db.js";
 import { executeCliTurn } from "./executor-turn.js";
-import { getOrCreateAgentSession } from "./executor-session.js";
-import { resolveTurnExecutionPolicy } from "./provider-execution-policy.js";
+import { getHiBossDir } from "./home-setup.js";
+import { writePersistedAgentSession } from "./persisted-session.js";
 import { resolveAgentRunProjectScope } from "./project-context.js";
+import { resolveTurnExecutionPolicy } from "./provider-execution-policy.js";
+import { buildTurnInput } from "./turn-input.js";
+import type { Agent } from "./types.js";
 
 /**
  * Maximum number of pending envelopes to process in a single turn.
  */
 const MAX_ENVELOPES_PER_TURN = 10;
+const MAX_RUN_ERROR_NOTICE_LENGTH = 300;
 
 function readProjectIdFromEnvelopeMetadata(
   metadata: Record<string, unknown> | undefined
@@ -48,6 +49,62 @@ function readTaskIdFromEnvelopeMetadata(
   if (typeof value !== "string") return undefined;
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeRunErrorForNotification(error: string): string {
+  const normalized = error.replace(/\s+/g, " ").trim();
+  if (normalized.length === 0) return "unknown error";
+  if (normalized.length <= MAX_RUN_ERROR_NOTICE_LENGTH) return normalized;
+  return `${normalized.slice(0, MAX_RUN_ERROR_NOTICE_LENGTH)}...`;
+}
+
+export interface AgentRunNotificationRouter {
+  routeEnvelope(input: CreateEnvelopeInput): Promise<Envelope>;
+}
+
+export function buildRunFailureNotificationEnvelopes(params: {
+  agentName: string;
+  runId: string;
+  triggeringEnvelopes: Envelope[];
+  error: string;
+}): CreateEnvelopeInput[] {
+  const senderAddress = formatAgentAddress(params.agentName);
+  const normalizedError = normalizeRunErrorForNotification(params.error);
+
+  const notices: CreateEnvelopeInput[] = [];
+  for (const envelope of params.triggeringEnvelopes) {
+    const recipient = envelope.from;
+    if (recipient.trim().length === 0 || recipient === senderAddress) continue;
+
+    const sourceMetadata = envelope.metadata as Record<string, unknown> | undefined;
+    const metadata: Record<string, unknown> = {
+      source: "agent-run-failure",
+      failedAgent: params.agentName,
+      failedRunId: params.runId,
+      replyToEnvelopeId: envelope.id,
+    };
+    const projectId = readProjectIdFromEnvelopeMetadata(sourceMetadata);
+    if (projectId) metadata.projectId = projectId;
+    const taskId = readTaskIdFromEnvelopeMetadata(sourceMetadata);
+    if (taskId) metadata.taskId = taskId;
+
+    notices.push({
+      from: senderAddress,
+      to: recipient,
+      fromBoss: false,
+      content: {
+        text: [
+          "Agent run failed while processing your message.",
+          `agent: ${params.agentName}`,
+          `run-id: ${params.runId}`,
+          `error: ${normalizedError}`,
+        ].join("\n"),
+      },
+      metadata,
+    });
+  }
+
+  return notices;
 }
 
 export function resolveSessionRefreshTargetForAgent(params: {
@@ -92,19 +149,45 @@ export class AgentExecutor {
   private inFlightRuns: Map<string, InFlightAgentRun> = new Map();
   private pendingSessionRefresh: Map<string, SessionRefreshRequest> = new Map();
   private db: HiBossDatabase | null;
+  private router: AgentRunNotificationRouter | null;
   private hibossDir: string;
   private onEnvelopesDone?: (envelopeIds: string[], db: HiBossDatabase) => void | Promise<void>;
 
   constructor(
     options: {
       db?: HiBossDatabase;
+      router?: AgentRunNotificationRouter;
       hibossDir?: string;
       onEnvelopesDone?: (envelopeIds: string[], db: HiBossDatabase) => void | Promise<void>;
     } = {}
   ) {
     this.db = options.db ?? null;
+    this.router = options.router ?? null;
     this.hibossDir = options.hibossDir ?? getHiBossDir();
     this.onEnvelopesDone = options.onEnvelopesDone;
+  }
+
+  private async notifyRunFailure(params: {
+    agentName: string;
+    runId: string;
+    triggeringEnvelopes: Envelope[];
+    error: string;
+  }): Promise<void> {
+    if (!this.router) return;
+
+    const notices = buildRunFailureNotificationEnvelopes(params);
+    for (const notice of notices) {
+      try {
+        await this.router.routeEnvelope(notice);
+      } catch (err) {
+        logEvent("warn", "agent-run-failure-notification-failed", {
+          "agent-name": params.agentName,
+          "agent-run-id": params.runId,
+          to: notice.to,
+          error: errorMessage(err),
+        });
+      }
+    }
   }
 
   /**
@@ -490,6 +573,12 @@ export class AgentExecutor {
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       db.failAgentRun(run.id, errMsg);
+      await this.notifyRunFailure({
+        agentName: agent.name,
+        runId: run.id,
+        triggeringEnvelopes: envelopes,
+        error: errMsg,
+      });
       logEvent("info", "agent-run-complete", {
         "agent-name": agent.name,
         "agent-run-id": run.id,
@@ -595,6 +684,7 @@ export class AgentExecutor {
 
 export function createAgentExecutor(options?: {
   db?: HiBossDatabase;
+  router?: AgentRunNotificationRouter;
   hibossDir?: string;
   onEnvelopesDone?: (envelopeIds: string[], db: HiBossDatabase) => void | Promise<void>;
 }): AgentExecutor {

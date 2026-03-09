@@ -95,6 +95,8 @@ hiboss daemon start --token <boss-token> --no-web
 | GET | `/projects` | `project.list` | 列出项目 |
 | GET | `/projects/:id` | `project.get` | 项目详情 |
 | POST | `/projects/:id/select-leader` | `project.select-leader` | 选择 leader |
+| POST | `/projects/:id/chat/send` | — | 发送项目聊天消息（附带 `intentHint` 供 speaker 参考；speaker 分派到 leader 且缺少 `taskId` 时会自动建任务） |
+| GET | `/projects/:id/chat/messages` | — | 获取项目聊天消息（含项目内 agent↔agent 协作消息） |
 | POST | `/projects/:id/tasks` | — | 创建项目任务（可自动派发给 speaker） |
 | GET | `/projects/:id/tasks` | — | 列出项目任务 |
 | GET | `/projects/:id/tasks/:taskId` | — | 项目任务详情（含进度与关联消息） |

@@ -1117,24 +1117,15 @@ export class HiBossDatabase {
 
   listProjectChatEnvelopes(options: {
     projectId: string;
-    speakerAddress: string;
-    bossAddress: string;
     limit: number;
     createdBefore?: number;
   }): Envelope[] {
-    const { projectId, speakerAddress, bossAddress, limit, createdBefore } = options;
+    const { projectId, limit, createdBefore } = options;
     let sql = `
       SELECT * FROM envelopes
       WHERE json_extract(metadata, '$.projectId') = ?
-        AND (("from" = ? AND "to" = ?) OR ("from" = ? AND "to" = ?))
     `;
-    const params: Array<string | number> = [
-      projectId,
-      bossAddress,
-      speakerAddress,
-      speakerAddress,
-      bossAddress,
-    ];
+    const params: Array<string | number> = [projectId];
 
     if (typeof createdBefore === "number") {
       sql += " AND created_at <= ?";

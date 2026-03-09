@@ -301,6 +301,13 @@ export class MessageRouter {
       });
     }
 
+    // Web boss channel is delivered through the built-in web server path.
+    // Only the canonical chat id is allowed; unknown web chat ids keep failing.
+    if (adapterType === "web" && chatId === "boss") {
+      await this.completeDeliveredEnvelope(envelope);
+      return;
+    }
+
     // Get the adapter by token
     const adapter = this.adaptersByToken.get(binding.adapterToken);
     if (!adapter) {
@@ -337,18 +344,7 @@ export class MessageRouter {
         parseMode,
         replyToMessageId,
       });
-      this.db.updateEnvelopeStatus(envelope.id, "done");
-
-      if (this.onEnvelopeDone) {
-        try {
-          await this.onEnvelopeDone(envelope);
-        } catch (err) {
-          logEvent("error", "router-on-envelope-done-failed", {
-            "envelope-id": envelope.id,
-            error: errorMessage(err),
-          });
-        }
-      }
+      await this.completeDeliveredEnvelope(envelope);
     } catch (err) {
       const details = this.extractAdapterErrorDetails(adapterType, err);
       const msg = `Delivery to ${adapterType}:${chatId} failed: ${details.summary}`;
@@ -378,6 +374,21 @@ export class MessageRouter {
         adapterError: details,
         reason: "send-failed",
       });
+    }
+  }
+
+  private async completeDeliveredEnvelope(envelope: Envelope): Promise<void> {
+    this.db.updateEnvelopeStatus(envelope.id, "done");
+
+    if (this.onEnvelopeDone) {
+      try {
+        await this.onEnvelopeDone(envelope);
+      } catch (err) {
+        logEvent("error", "router-on-envelope-done-failed", {
+          "envelope-id": envelope.id,
+          error: errorMessage(err),
+        });
+      }
     }
   }
 

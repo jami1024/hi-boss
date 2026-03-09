@@ -4,12 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DEFAULT_PERMISSION_POLICY } from "../../shared/permissions.js";
-import { MessageRouter } from "../router/message-router.js";
+import { WEB_BOSS_ADDRESS } from "../../web/handlers/envelopes.js";
 import { HiBossDatabase } from "../db/database.js";
+import { MessageRouter } from "../router/message-router.js";
+import type { DaemonContext, Principal } from "./context.js";
 import { createEnvelopeHandlers } from "./envelope-handlers.js";
 import { normalizeWorkspacePath } from "./work-item-orchestration.js";
-import type { DaemonContext, Principal } from "./context.js";
-import { WEB_BOSS_ADDRESS } from "../../web/handlers/envelopes.js";
 
 function withTempDb(run: (db: HiBossDatabase, tempDir: string) => Promise<void> | void): Promise<void> {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "hiboss-rpc-envelope-test-"));
@@ -461,6 +461,15 @@ test("envelope.send injects metadata.projectId from running run context", async 
 
     const created = db.getEnvelopeById(result.id);
     assert.equal((created?.metadata as Record<string, unknown> | undefined)?.projectId, project.id);
+    const taskId = (created?.metadata as Record<string, unknown> | undefined)?.taskId;
+    assert.equal(typeof taskId, "string");
+    assert.ok(taskId);
+
+    const task = db.getProjectTaskById(String(taskId));
+    assert.ok(task);
+    assert.equal(task?.projectId, project.id);
+    assert.equal(task?.state, "dispatched");
+    assert.equal(task?.assignee, "kai");
   });
 });
 

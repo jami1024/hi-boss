@@ -55,7 +55,7 @@ async function request<T>(
   if (res.status === 401) {
     clearToken();
     window.location.reload();
-    throw new Error("Unauthorized");
+    throw new Error("未授权，请重新登录");
   }
 
   const data = (await res.json().catch(() => ({}))) as unknown;
@@ -69,7 +69,7 @@ async function request<T>(
       message:
         typeof payload.error === "string" && payload.error.trim().length > 0
           ? payload.error
-          : `Request failed: ${res.status}`,
+          : `请求失败：${res.status}`,
       status: res.status,
       errorCode: typeof payload.errorCode === "string" ? payload.errorCode : undefined,
       hint: typeof payload.hint === "string" ? payload.hint : undefined,
@@ -515,7 +515,11 @@ export const api = {
     ),
 
   sendProjectChatMessage: (projectId: string, text: string) =>
-    request<{ id: string }>("POST", `/projects/${encodeURIComponent(projectId)}/chat/send`, { text }),
+    request<{ id: string; intentHint?: "requirement" | "qa" }>(
+      "POST",
+      `/projects/${encodeURIComponent(projectId)}/chat/send`,
+      { text }
+    ),
 
   getProjectChatMessages: (projectId: string, opts?: { limit?: number; before?: number }) => {
     const params = new URLSearchParams();

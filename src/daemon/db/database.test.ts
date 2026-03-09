@@ -389,7 +389,7 @@ test("getPendingEnvelopesForAgent batches envelopes by projectId context", () =>
   });
 });
 
-test("listProjectChatEnvelopes returns only project-scoped boss/speaker messages", () => {
+test("listProjectChatEnvelopes returns all project-scoped envelopes", () => {
   withTempDb((db) => {
     db.createEnvelope({
       from: "channel:web:boss",
@@ -418,19 +418,28 @@ test("listProjectChatEnvelopes returns only project-scoped boss/speaker messages
       content: { text: "project-a wrong target" },
       metadata: { source: "web", projectId: "prj-a" },
     });
+    db.createEnvelope({
+      from: "agent:worker",
+      to: "agent:kai",
+      content: { text: "project-a worker-to-leader" },
+      metadata: { projectId: "prj-a" },
+    });
 
     const rows = db.listProjectChatEnvelopes({
       projectId: "prj-a",
-      speakerAddress: "agent:nex",
-      bossAddress: "channel:web:boss",
       limit: 50,
     });
 
-    assert.equal(rows.length, 2);
+    assert.equal(rows.length, 4);
     assert(rows.every((row) => (row.metadata as Record<string, unknown> | undefined)?.projectId === "prj-a"));
     assert.deepEqual(
       rows.map((row) => row.content.text),
-      ["project-a outbound", "project-a inbound"]
+      [
+        "project-a worker-to-leader",
+        "project-a wrong target",
+        "project-a outbound",
+        "project-a inbound",
+      ]
     );
   });
 });

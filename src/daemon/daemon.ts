@@ -2,22 +2,16 @@
  * Hi-Boss daemon - manages agents, messages, and platform integrations.
  */
 
-import * as path from "path";
-import { HiBossDatabase } from "./db/database.js";
-import { IpcServer } from "./ipc/server.js";
-import { MessageRouter } from "./router/message-router.js";
-import { ChannelBridge } from "./bridges/channel-bridge.js";
-import { AgentExecutor, createAgentExecutor } from "../agent/executor.js";
+import * as path from "node:path";
 import { type BackgroundExecutor, createBackgroundExecutor } from "../agent/background-executor.js";
+import { type AgentExecutor, createAgentExecutor } from "../agent/executor.js";
 import type { Agent } from "../agent/types.js";
-import { EnvelopeScheduler } from "./scheduler/envelope-scheduler.js";
-import { CronScheduler } from "./scheduler/cron-scheduler.js";
-import type { RpcMethodRegistry } from "./ipc/types.js";
-import { RPC_ERRORS } from "./ipc/types.js";
 import type { ChatAdapter } from "../adapters/types.js";
-import { TelegramAdapter } from "../adapters/telegram.adapter.js";
 import { FeishuAdapter } from "../adapters/feishu.adapter.js";
+import { TelegramAdapter } from "../adapters/telegram.adapter.js";
+import { getEnvelopeSourceFromEnvelope } from "../envelope/source.js";
 import { BACKGROUND_AGENT_NAME, DEFAULT_AGENT_PERMISSION_LEVEL } from "../shared/defaults.js";
+import { errorMessage, logEvent, setDaemonLogTimeZone } from "../shared/daemon-log.js";
 import { getHiBossPaths } from "../shared/hiboss-paths.js";
 import {
   DEFAULT_PERMISSION_POLICY,
@@ -27,12 +21,18 @@ import {
   isAtLeastPermissionLevel,
   parsePermissionPolicyV1OrDefault,
 } from "../shared/permissions.js";
-import { errorMessage, logEvent, setDaemonLogTimeZone } from "../shared/daemon-log.js";
 import { WebServer, DEFAULT_WEB_PORT, type WebServerConfig } from "../web/server.js";
-import { getEnvelopeSourceFromEnvelope } from "../envelope/source.js";
+import { ChannelBridge } from "./bridges/channel-bridge.js";
+import { HiBossDatabase } from "./db/database.js";
+import type { RpcMethodRegistry } from "./ipc/types.js";
+import { RPC_ERRORS } from "./ipc/types.js";
+import { IpcServer } from "./ipc/server.js";
 import { PidLock, isDaemonRunning, isSocketAcceptingConnections } from "./pid-lock.js";
 import type { DaemonContext, Principal } from "./rpc/context.js";
 import { rpcError } from "./rpc/context.js";
+import { MessageRouter } from "./router/message-router.js";
+import { CronScheduler } from "./scheduler/cron-scheduler.js";
+import { EnvelopeScheduler } from "./scheduler/envelope-scheduler.js";
 import {
   createDaemonHandlers,
   createReactionHandlers,
@@ -132,6 +132,7 @@ export class Daemon {
     this.bridge = new ChannelBridge(this.router, this.db, config);
     this.executor = createAgentExecutor({
       db: this.db,
+      router: this.router,
       hibossDir: config.dataDir,
       onEnvelopesDone: (envelopeIds) => this.cronScheduler?.onEnvelopesDone(envelopeIds),
     });
@@ -417,6 +418,9 @@ export class Daemon {
       case "feishu":
         adapter = new FeishuAdapter(adapterToken);
         break;
+      case "web":
+        // Web channel is built-in (web UI/WebSocket path), no external adapter to load.
+        return null;
       default:
         logEvent("error", "adapter-unknown-type", { "adapter-type": adapterType });
         return null;

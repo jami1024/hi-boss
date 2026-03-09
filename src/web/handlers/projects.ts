@@ -2,14 +2,17 @@
  * Project management API handlers for the web UI.
  */
 
-import type { RouteHandler } from "../router.js";
-import { sendJson } from "../router.js";
-import { requireBossToken } from "../middleware/auth.js";
+import { formatAgentAddress } from "../../adapters/types.js";
 import type { DaemonContext } from "../../daemon/rpc/context.js";
 import { deriveProjectIdFromRoot } from "../../daemon/rpc/work-item-orchestration.js";
-import { formatAgentAddress } from "../../adapters/types.js";
-import { WEB_BOSS_ADDRESS } from "./envelopes.js";
+import {
+  classifyProjectChatIntent,
+} from "../../shared/project-intent.js";
 import { isProjectTaskPriority, isProjectTaskState } from "../../shared/project-task.js";
+import { requireBossToken } from "../middleware/auth.js";
+import type { RouteHandler } from "../router.js";
+import { sendJson } from "../router.js";
+import { WEB_BOSS_ADDRESS } from "./envelopes.js";
 
 export function createProjectHandlers(daemon: DaemonContext): Record<string, RouteHandler> {
   const normalizeTaskId = (raw: string | undefined): string | null => {
@@ -409,6 +412,8 @@ export function createProjectHandlers(daemon: DaemonContext): Record<string, Rou
       return;
     }
 
+    const intentHint = classifyProjectChatIntent(text);
+
     const envelope = await daemon.router.routeEnvelope({
       from: WEB_BOSS_ADDRESS,
       to: formatAgentAddress(project.speakerAgent),
@@ -417,11 +422,15 @@ export function createProjectHandlers(daemon: DaemonContext): Record<string, Rou
       metadata: {
         source: "web",
         projectId: project.id,
+        intentHint,
       },
     });
 
     daemon.scheduler.onEnvelopeCreated(envelope);
-    sendJson(ctx.res, 200, { id: envelope.id });
+    sendJson(ctx.res, 200, {
+      id: envelope.id,
+      intentHint,
+    });
   };
 
   const listProjectChatMessages: RouteHandler = async (ctx) => {
@@ -446,8 +455,6 @@ export function createProjectHandlers(daemon: DaemonContext): Record<string, Rou
     const messages = daemon.db
       .listProjectChatEnvelopes({
         projectId: project.id,
-        speakerAddress: formatAgentAddress(project.speakerAgent),
-        bossAddress: WEB_BOSS_ADDRESS,
         limit,
         ...(typeof before === "number" && Number.isFinite(before) ? { createdBefore: before } : {}),
       })
