@@ -1,5 +1,6 @@
 import type { HiBossDatabase } from "../daemon/db/database.js";
 import type { ChildProcess } from "node:child_process";
+import type { Envelope } from "../envelope/types.js";
 
 export interface AgentSession {
   provider: "claude" | "codex";
@@ -146,4 +147,18 @@ export function getRefreshReasonForPolicy(
   }
 
   return null;
+}
+
+/**
+ * Parameters passed to the afterTurn callback after a successful agent run.
+ */
+export interface OnTurnCompleteParams {
+  agentName: string;
+  runId: string;
+  sessionKey: string;
+  isProjectScoped: boolean;
+  envelopes: Envelope[];
+  response: string;
+  usage: TurnTokenUsage;
+  hibossDir: string;
 }

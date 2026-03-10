@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { type BackgroundExecutor, createBackgroundExecutor } from "../agent/background-executor.js";
 import { type AgentExecutor, createAgentExecutor } from "../agent/executor.js";
 import type { Agent } from "../agent/types.js";
+import { handleTurnComplete } from "../agent/memory-extractor.js";
 import type { ChatAdapter } from "../adapters/types.js";
 import { FeishuAdapter } from "../adapters/feishu.adapter.js";
 import { TelegramAdapter } from "../adapters/telegram.adapter.js";
@@ -135,8 +136,13 @@ export class Daemon {
       router: this.router,
       hibossDir: config.dataDir,
       onEnvelopesDone: (envelopeIds) => this.cronScheduler?.onEnvelopesDone(envelopeIds),
+      onTurnComplete: (params) => handleTurnComplete(params),
     });
-    this.backgroundExecutor = createBackgroundExecutor({ db: this.db, router: this.router });
+    this.backgroundExecutor = createBackgroundExecutor({
+      db: this.db,
+      router: this.router,
+      hibossDir: config.dataDir,
+    });
     this.scheduler = new EnvelopeScheduler(this.db, this.router, this.executor);
     this.cronScheduler = new CronScheduler(this.db, this.scheduler);
 

@@ -11,6 +11,8 @@ import {
 import { errorMessage, logEvent } from "../shared/daemon-log.js";
 import { executeBackgroundPrompt } from "./background-turn.js";
 import { resolveBackgroundExecutionPolicy } from "./provider-execution-policy.js";
+import { recallRelevantMemory } from "./memory-recall.js";
+import { getHiBossDir } from "./home-setup.js";
 
 function formatAttachmentsForPrompt(envelope: Envelope): string {
   const attachments = envelope.content.attachments ?? [];
@@ -24,29 +26,40 @@ function formatAttachmentsForPrompt(envelope: Envelope): string {
     .join("\n");
 }
 
-function buildBackgroundPrompt(envelope: Envelope): string {
+function buildBackgroundPrompt(envelope: Envelope, memoryContext?: string): string {
   const text = envelope.content.text?.trim() ? envelope.content.text.trim() : "(none)";
   const attachmentsText = formatAttachmentsForPrompt(envelope);
 
-  if (attachmentsText === "(none)") {
-    return text;
+  const parts: string[] = [];
+
+  // Phase 4: Inject sender's relevant memory context for better task understanding.
+  if (memoryContext) {
+    parts.push("## Context (from sender's memory)", "", memoryContext, "");
   }
 
-  return [text, "", "attachments:", attachmentsText].join("\n");
+  parts.push(text);
+
+  if (attachmentsText !== "(none)") {
+    parts.push("", "attachments:", attachmentsText);
+  }
+
+  return parts.join("\n");
 }
 
 export class BackgroundExecutor {
   private readonly maxConcurrent: number;
   private readonly queue: Envelope[] = [];
   private inFlight = 0;
+  private readonly hibossDir: string;
 
   constructor(
     private readonly deps: { db: HiBossDatabase; router: MessageRouter },
-    options: { maxConcurrent?: number } = {}
+    options: { maxConcurrent?: number; hibossDir?: string } = {}
   ) {
     const raw = options.maxConcurrent ?? DEFAULT_BACKGROUND_MAX_CONCURRENT;
     const n = Number.isFinite(raw) ? Math.trunc(raw) : DEFAULT_BACKGROUND_MAX_CONCURRENT;
     this.maxConcurrent = Math.max(1, Math.min(32, n));
+    this.hibossDir = options.hibossDir ?? getHiBossDir();
   }
 
   /**
@@ -122,7 +135,24 @@ export class BackgroundExecutor {
       envelope,
       senderAgent.workspace?.trim() || getDefaultRuntimeWorkspace()
     );
-    const prompt = buildBackgroundPrompt(envelope);
+
+    // Phase 4: Recall relevant memory from sender agent for background task context.
+    let memoryContext: string | undefined;
+    try {
+      const recall = recallRelevantMemory({
+        envelopes: [envelope],
+        hibossDir: this.hibossDir,
+        agentName: senderName,
+        maxChars: 2000,
+      });
+      if (recall.text) {
+        memoryContext = recall.text;
+      }
+    } catch {
+      // Best-effort; skip memory injection on failure.
+    }
+
+    const prompt = buildBackgroundPrompt(envelope, memoryContext);
     const executionPolicy = resolveBackgroundExecutionPolicy({
       permissionLevel: senderAgent.permissionLevel,
       prompt,
@@ -162,6 +192,7 @@ export class BackgroundExecutor {
       content: { text: finalText },
       metadata: {
         replyToEnvelopeId: envelope.id,
+        sourceType: "background-result",
       },
     });
 
@@ -179,6 +210,10 @@ export function createBackgroundExecutor(params: {
   db: HiBossDatabase;
   router: MessageRouter;
   maxConcurrent?: number;
+  hibossDir?: string;
 }): BackgroundExecutor {
-  return new BackgroundExecutor({ db: params.db, router: params.router }, { maxConcurrent: params.maxConcurrent });
+  return new BackgroundExecutor(
+    { db: params.db, router: params.router },
+    { maxConcurrent: params.maxConcurrent, hibossDir: params.hibossDir },
+  );
 }

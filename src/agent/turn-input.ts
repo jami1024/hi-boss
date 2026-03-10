@@ -1,13 +1,15 @@
 /**
  * Turn input builder for agent runs.
  *
- * Builds the input text for a single agent turn, combining context and pending envelopes.
+ * Builds the input text for a single agent turn, combining context,
+ * recalled memory, and pending envelopes.
  */
 
 import type { Envelope } from "../envelope/types.js";
 import { renderPrompt } from "../shared/prompt-renderer.js";
 import { buildTurnPromptContext } from "../shared/prompt-context.js";
 import { getDaemonIanaTimeZone } from "../shared/timezone.js";
+import { recallRelevantMemory } from "./memory-recall.js";
 
 /**
  * Context for the current turn.
@@ -24,6 +26,8 @@ export interface TurnContext {
 export interface TurnInput {
   context: TurnContext;
   envelopes: Envelope[];  // oldest N pending envelopes
+  /** Hi-Boss data dir for memory recall. */
+  hibossDir?: string;
 }
 
 /**
@@ -36,25 +40,13 @@ export interface TurnInput {
  * now: 2026-01-27T20:00:00+08:00
  * pending-envelopes: 3
  *
+ * ## Recalled Memory (relevant to current envelopes)
+ * [MEMORY.md] relevant fragment...
+ * [memories/2026-03-10.md] another fragment...
+ *
  * ---
  *
  * envelope-id: 4b7c2d1a
- * from: channel:telegram:12345
- * sender: Alice (@alice) in group "hiboss-test"
- * created-at: 2026-01-27T20:00:00+08:00
- *
- * Hello!
- *
- * ---
- *
- * envelope-id: 7aa9f102
- * from: channel:telegram:12345
- * sender: Bob (@bob) in group "hiboss-test"
- * created-at: 2026-01-27T20:01:00+08:00
- *
- * Hi!
- *
- * ---
  * ...
  * ```
  *
@@ -64,11 +56,23 @@ export interface TurnInput {
 export function buildTurnInput(turnInput: TurnInput): string {
   const { context, envelopes } = turnInput;
 
+  // Phase 2: Turn-level memory recall (keyword-based)
+  let recalledMemory = "";
+  if (turnInput.hibossDir) {
+    const recall = recallRelevantMemory({
+      envelopes,
+      hibossDir: turnInput.hibossDir,
+      agentName: context.agentName,
+    });
+    recalledMemory = recall.text;
+  }
+
   const promptContext = buildTurnPromptContext({
     agentName: context.agentName,
     datetimeMs: context.datetimeMs,
     bossTimezone: context.bossTimezone,
     envelopes,
+    recalledMemory,
   });
 
   return renderPrompt({

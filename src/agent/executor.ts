@@ -13,6 +13,7 @@ import { getOrCreateAgentSession } from "./executor-session.js";
 import {
   queueAgentTask,
   type AgentSession,
+  type OnTurnCompleteParams,
   type SessionRefreshRequest,
 } from "./executor-support.js";
 import type { AgentRunTrigger } from "./executor-triggers.js";
@@ -24,6 +25,7 @@ import { resolveAgentRunProjectScope } from "./project-context.js";
 import { resolveTurnExecutionPolicy } from "./provider-execution-policy.js";
 import { buildTurnInput } from "./turn-input.js";
 import type { Agent } from "./types.js";
+import { appendSessionRefreshNote } from "./memory-extractor.js";
 
 /**
  * Maximum number of pending envelopes to process in a single turn.
@@ -152,6 +154,7 @@ export class AgentExecutor {
   private router: AgentRunNotificationRouter | null;
   private hibossDir: string;
   private onEnvelopesDone?: (envelopeIds: string[], db: HiBossDatabase) => void | Promise<void>;
+  private onTurnComplete?: (params: OnTurnCompleteParams) => void | Promise<void>;
 
   constructor(
     options: {
@@ -159,12 +162,14 @@ export class AgentExecutor {
       router?: AgentRunNotificationRouter;
       hibossDir?: string;
       onEnvelopesDone?: (envelopeIds: string[], db: HiBossDatabase) => void | Promise<void>;
+      onTurnComplete?: (params: OnTurnCompleteParams) => void | Promise<void>;
     } = {}
   ) {
     this.db = options.db ?? null;
     this.router = options.router ?? null;
     this.hibossDir = options.hibossDir ?? getHiBossDir();
     this.onEnvelopesDone = options.onEnvelopesDone;
+    this.onTurnComplete = options.onTurnComplete;
   }
 
   private async notifyRunFailure(params: {
@@ -462,6 +467,7 @@ export class AgentExecutor {
           bossTimezone: db.getBossTimezone(),
         },
         envelopes,
+        hibossDir: this.hibossDir,
       });
 
       const executionPolicy = resolveTurnExecutionPolicy({
@@ -542,6 +548,28 @@ export class AgentExecutor {
 
       // Complete the run record
       db.completeAgentRun(run.id, response, turn.usage.contextLength);
+
+      // afterTurn hook: let memory extractor and other modules process the completed turn.
+      if (this.onTurnComplete) {
+        try {
+          await this.onTurnComplete({
+            agentName: agent.name,
+            runId: run.id,
+            sessionKey: runProjectScope.sessionKey,
+            isProjectScoped: runProjectScope.isProjectScoped,
+            envelopes,
+            response,
+            usage: turn.usage,
+            hibossDir: this.hibossDir,
+          });
+        } catch (err) {
+          logEvent("warn", "agent-on-turn-complete-failed", {
+            "agent-name": agent.name,
+            "agent-run-id": run.id,
+            error: errorMessage(err),
+          });
+        }
+      }
 
       logEvent("info", "agent-run-complete", {
         "agent-name": agent.name,
@@ -631,6 +659,22 @@ export class AgentExecutor {
       ? agentNameOrSessionKey.slice(0, agentNameOrSessionKey.indexOf(":"))
       : agentNameOrSessionKey;
 
+    // Phase 1: Record session refresh event to daily memory before clearing.
+    const existingSession = this.sessions.get(agentNameOrSessionKey);
+    if (existingSession) {
+      try {
+        appendSessionRefreshNote({
+          hibossDir: this.hibossDir,
+          agentName,
+          reason,
+          sessionCreatedAtMs: existingSession.createdAtMs,
+          lastRunAtMs: existingSession.lastRunCompletedAtMs,
+        });
+      } catch {
+        // Best-effort; do not block refresh.
+      }
+    }
+
     const pendingTargets = this.resolvePendingRefreshKeysForTarget(agentNameOrSessionKey);
     for (const target of pendingTargets) {
       this.pendingSessionRefresh.delete(target);
@@ -687,6 +731,7 @@ export function createAgentExecutor(options?: {
   router?: AgentRunNotificationRouter;
   hibossDir?: string;
   onEnvelopesDone?: (envelopeIds: string[], db: HiBossDatabase) => void | Promise<void>;
+  onTurnComplete?: (params: OnTurnCompleteParams) => void | Promise<void>;
 }): AgentExecutor {
   return new AgentExecutor(options);
 }

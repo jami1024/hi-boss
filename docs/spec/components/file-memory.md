@@ -73,6 +73,32 @@ Rules:
 - Updating `MEMORY.md` is manual and best-effort (when the agent learns something stable/reusable).
 - Hi-Boss does not implement an automated “reflection/consolidation” task in v1.
 
+## Curation enhancements (v1.1)
+
+### afterTurn auto-extraction
+
+After each successful agent turn, Hi-Boss automatically extracts a concise memory entry
+from the turn results and appends it to the agent’s daily memory file. This uses rule-based
+extraction (no LLM calls) for zero extra token cost.
+
+Extracted information includes:
+- Which envelopes were processed (senders)
+- What actions were taken (envelope sends, reactions, cron creation)
+
+The auto-extracted entries respect the daily per-file size limit.
+
+### Session refresh notes
+
+When a session is refreshed (daily reset, idle timeout, context overflow), Hi-Boss records
+the event to the daily memory file with the refresh reason, helping agents understand
+why their conversation context was reset.
+
+### Memory reflection
+
+Hi-Boss provides a reflection prompt builder (`memory-reflection.ts`) that can be used
+to send periodic reflection envelopes to agents. The agent then reviews recent daily
+memories and consolidates valuable information into MEMORY.md.
+
 ## Prompt injection (current behavior)
 
 On each new session, Hi-Boss injects:
@@ -82,15 +108,28 @@ On each new session, Hi-Boss injects:
 This keeps “always-on” memory small while still providing a short recency window.
 If no daily files exist yet, the injected daily snapshot is empty.
 
+### Turn-level memory recall (v1.1)
+
+On each turn, Hi-Boss performs keyword-based recall against a broader memory window:
+- Searches MEMORY.md paragraphs and up to **14** days of daily memory
+- Scores each block by keyword relevance to current envelopes
+- Injects top-scoring fragments (up to **2,000** chars) into the turn prompt
+
+This ensures relevant historical context reaches the agent even in continuous sessions
+where the system prompt is not regenerated. The recall budget is separate from the
+system-prompt injection budget.
+
 ## Size constraints (defaults)
 
 These defaults are chosen to keep prompt cost predictable:
 
-- **Total injected memory budget:** ~20,000 chars
+- **Total injected memory budget (system prompt):** ~20,000 chars
 - **Long-term injected max (`MEMORY.md`):** ~12,000 chars
 - **Recent daily injected max (combined):** ~8,000 chars (per-day max × days)
 - **Recent daily per-day injected max:** ~4,000 chars
-- **Recent daily window:** last **2** days/files
+- **Recent daily window (system prompt):** last **2** days/files
+- **Turn-level recall budget:** ~2,000 chars (separate from system prompt)
+- **Turn-level recall search window:** last **14** days/files
 
 Enforcement:
 - Injection is truncated when limits are exceeded and a visible truncation marker is appended to the injected snapshot.
@@ -103,3 +142,22 @@ If envelopes are treated as disposable, a recovery-capable backup only needs:
 - `internal_space/memories/*.md`
 
 Everything else (SQLite queue/audit, vector stores, indexes) is rebuildable runtime state.
+
+## Multi-agent memory (v1.1)
+
+### Background agent memory injection
+
+Background agents (one-shot tasks) now receive relevant memory context from the sender agent.
+The system recalls keyword-matched memory fragments (up to 2,000 chars) from the sender's
+memory and injects them as context into the background prompt.
+
+Background result envelopes include `sourceType: "background-result"` metadata to help
+the sender agent's afterTurn handler identify and process background task results.
+
+### Project-level shared memory
+
+Project memory lives in `<project-root>/.hiboss/memory/` as Markdown files.
+A structured write protocol (`project-memory.ts`) provides:
+- Conflict-safe atomic writes (temp file + rename)
+- Author and timestamp metadata in YAML frontmatter
+- File naming convention: `YYYY-MM-DD-<agent>-<title>.md`
