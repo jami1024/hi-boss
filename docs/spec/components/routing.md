@@ -106,9 +106,12 @@ See `docs/spec/components/scheduler.md` for the exact wake-up algorithm.
 3. `ChannelBridge` enforces boss-only behavior and resolves which agent is bound to that bot token:
    - if unbound: returns a `not-configured:` + `fix:` message
    - if bound: enriches the command with `agentName`
-4. `Daemon` receives the bound command, calls `AgentExecutor.requestSessionRefresh(agentName, "telegram:/new")`, and returns `Session refresh requested.`
-5. `TelegramAdapter` replies with the returned message.
-6. The refresh is applied at the next safe point (before the next run, or after the current queue drains).
+4. `Daemon` receives the bound command and resolves refresh target:
+   - `/new` (no args): calls `AgentExecutor.requestSessionRefresh(agentName, "telegram:/new", "auto-project")`
+   - `/new <project-id>`: validates project id + membership (speaker/leader), then calls `AgentExecutor.requestSessionRefresh(agentName, "telegram:/new", "project", projectId)`
+5. Daemon returns `Session refresh requested.` on success, or `error: ...` text on validation failure.
+6. `TelegramAdapter` replies with the returned message.
+7. The refresh is applied at the next safe point (before the next run, or after the current queue drains).
 
 ---
 

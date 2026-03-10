@@ -2,31 +2,136 @@
  * Agent executor for running agent sessions with direct CLI invocation.
  */
 import type { ChildProcess } from "node:child_process";
-import type { Agent } from "./types.js";
+import { formatAgentAddress } from "../adapters/types.js";
 import type { HiBossDatabase } from "../daemon/db/database.js";
-import { getHiBossDir } from "./home-setup.js";
-import { buildTurnInput } from "./turn-input.js";
-import {
-  parseSessionPolicyConfig,
-} from "../shared/session-policy.js";
+import type { CreateEnvelopeInput, Envelope } from "../envelope/types.js";
+import { parseAgentRoleFromMetadata } from "../shared/agent-role.js";
 import { errorMessage, logEvent } from "../shared/daemon-log.js";
+import { parseSessionPolicyConfig } from "../shared/session-policy.js";
+import { countDuePendingEnvelopesForAgent } from "./executor-db.js";
+import { getOrCreateAgentSession } from "./executor-session.js";
 import {
   queueAgentTask,
   type AgentSession,
   type SessionRefreshRequest,
 } from "./executor-support.js";
-import { writePersistedAgentSession } from "./persisted-session.js";
 import type { AgentRunTrigger } from "./executor-triggers.js";
 import { getTriggerFields } from "./executor-triggers.js";
-import { countDuePendingEnvelopesForAgent } from "./executor-db.js";
 import { executeCliTurn } from "./executor-turn.js";
-import { getOrCreateAgentSession } from "./executor-session.js";
+import { getHiBossDir } from "./home-setup.js";
+import { writePersistedAgentSession } from "./persisted-session.js";
+import { resolveAgentRunProjectScope } from "./project-context.js";
 import { resolveTurnExecutionPolicy } from "./provider-execution-policy.js";
+import { buildTurnInput } from "./turn-input.js";
+import type { Agent } from "./types.js";
 
 /**
  * Maximum number of pending envelopes to process in a single turn.
  */
 const MAX_ENVELOPES_PER_TURN = 10;
+const MAX_RUN_ERROR_NOTICE_LENGTH = 300;
+
+function readProjectIdFromEnvelopeMetadata(
+  metadata: Record<string, unknown> | undefined
+): string | undefined {
+  if (!metadata) return undefined;
+  const value = metadata.projectId;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function readTaskIdFromEnvelopeMetadata(
+  metadata: Record<string, unknown> | undefined
+): string | undefined {
+  if (!metadata) return undefined;
+  const value = metadata.taskId;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeRunErrorForNotification(error: string): string {
+  const normalized = error.replace(/\s+/g, " ").trim();
+  if (normalized.length === 0) return "unknown error";
+  if (normalized.length <= MAX_RUN_ERROR_NOTICE_LENGTH) return normalized;
+  return `${normalized.slice(0, MAX_RUN_ERROR_NOTICE_LENGTH)}...`;
+}
+
+export interface AgentRunNotificationRouter {
+  routeEnvelope(input: CreateEnvelopeInput): Promise<Envelope>;
+}
+
+export function buildRunFailureNotificationEnvelopes(params: {
+  agentName: string;
+  runId: string;
+  triggeringEnvelopes: Envelope[];
+  error: string;
+}): CreateEnvelopeInput[] {
+  const senderAddress = formatAgentAddress(params.agentName);
+  const normalizedError = normalizeRunErrorForNotification(params.error);
+
+  const notices: CreateEnvelopeInput[] = [];
+  for (const envelope of params.triggeringEnvelopes) {
+    const recipient = envelope.from;
+    if (recipient.trim().length === 0 || recipient === senderAddress) continue;
+
+    const sourceMetadata = envelope.metadata as Record<string, unknown> | undefined;
+    const metadata: Record<string, unknown> = {
+      source: "agent-run-failure",
+      failedAgent: params.agentName,
+      failedRunId: params.runId,
+      replyToEnvelopeId: envelope.id,
+    };
+    const projectId = readProjectIdFromEnvelopeMetadata(sourceMetadata);
+    if (projectId) metadata.projectId = projectId;
+    const taskId = readTaskIdFromEnvelopeMetadata(sourceMetadata);
+    if (taskId) metadata.taskId = taskId;
+
+    notices.push({
+      from: senderAddress,
+      to: recipient,
+      fromBoss: false,
+      content: {
+        text: [
+          "Agent run failed while processing your message.",
+          `agent: ${params.agentName}`,
+          `run-id: ${params.runId}`,
+          `error: ${normalizedError}`,
+        ].join("\n"),
+      },
+      metadata,
+    });
+  }
+
+  return notices;
+}
+
+export function resolveSessionRefreshTargetForAgent(params: {
+  db: HiBossDatabase | null;
+  agentName: string;
+}): string {
+  const run = params.db?.getCurrentRunningAgentRun(params.agentName);
+  if (!run) return params.agentName;
+
+  let projectId: string | undefined;
+  for (const envelopeId of run.envelopeIds) {
+    const envelope = params.db?.getEnvelopeById(envelopeId);
+    const envelopeProjectId = readProjectIdFromEnvelopeMetadata(
+      envelope?.metadata as Record<string, unknown> | undefined
+    );
+    if (!envelopeProjectId) continue;
+    if (!projectId) {
+      projectId = envelopeProjectId;
+      continue;
+    }
+    if (projectId !== envelopeProjectId) {
+      return params.agentName;
+    }
+  }
+
+  return projectId ? `${params.agentName}:${projectId}` : params.agentName;
+}
 
 type InFlightAgentRun = {
   runRecordId: string;
@@ -44,19 +149,45 @@ export class AgentExecutor {
   private inFlightRuns: Map<string, InFlightAgentRun> = new Map();
   private pendingSessionRefresh: Map<string, SessionRefreshRequest> = new Map();
   private db: HiBossDatabase | null;
+  private router: AgentRunNotificationRouter | null;
   private hibossDir: string;
   private onEnvelopesDone?: (envelopeIds: string[], db: HiBossDatabase) => void | Promise<void>;
 
   constructor(
     options: {
       db?: HiBossDatabase;
+      router?: AgentRunNotificationRouter;
       hibossDir?: string;
       onEnvelopesDone?: (envelopeIds: string[], db: HiBossDatabase) => void | Promise<void>;
     } = {}
   ) {
     this.db = options.db ?? null;
+    this.router = options.router ?? null;
     this.hibossDir = options.hibossDir ?? getHiBossDir();
     this.onEnvelopesDone = options.onEnvelopesDone;
+  }
+
+  private async notifyRunFailure(params: {
+    agentName: string;
+    runId: string;
+    triggeringEnvelopes: Envelope[];
+    error: string;
+  }): Promise<void> {
+    if (!this.router) return;
+
+    const notices = buildRunFailureNotificationEnvelopes(params);
+    for (const notice of notices) {
+      try {
+        await this.router.routeEnvelope(notice);
+      } catch (err) {
+        logEvent("warn", "agent-run-failure-notification-failed", {
+          "agent-name": params.agentName,
+          "agent-run-id": params.runId,
+          to: notice.to,
+          error: errorMessage(err),
+        });
+      }
+    }
   }
 
   /**
@@ -97,12 +228,23 @@ export class AgentExecutor {
   /**
    * Request a session refresh for an agent.
    */
-  requestSessionRefresh(agentName: string, reason: string): void {
-    const existing = this.pendingSessionRefresh.get(agentName);
+  requestSessionRefresh(
+    agentName: string,
+    reason: string,
+    scope: "agent" | "auto-project" | "project" = "agent",
+    projectId?: string
+  ): void {
+    const sessionTarget = scope === "auto-project"
+      ? resolveSessionRefreshTargetForAgent({ db: this.db, agentName })
+      : scope === "project" && projectId
+      ? `${agentName}:${projectId}`
+      : agentName;
+
+    const existing = this.pendingSessionRefresh.get(sessionTarget);
     if (existing) {
       existing.reasons.push(reason);
     } else {
-      this.pendingSessionRefresh.set(agentName, {
+      this.pendingSessionRefresh.set(sessionTarget, {
         requestedAtMs: Date.now(),
         reasons: [reason],
       });
@@ -113,7 +255,7 @@ export class AgentExecutor {
       agentName,
       log: () => undefined,
       task: async () => {
-        await this.applyPendingSessionRefresh(agentName);
+        await this.applyPendingSessionRefresh(sessionTarget);
       },
     }).catch((err) => {
       logEvent("error", "agent-session-remove-queue-failed", {
@@ -127,17 +269,58 @@ export class AgentExecutor {
     return parseSessionPolicyConfig(agent.sessionPolicy, { strict: false });
   }
 
-  private getAndClearPendingRefreshReasons(agentName: string): string[] {
-    const pending = this.pendingSessionRefresh.get(agentName);
-    if (!pending) return [];
-    this.pendingSessionRefresh.delete(agentName);
-    return pending.reasons;
+  private resolveSessionKeysForTarget(target: string): string[] {
+    if (target.includes(":")) {
+      return this.sessions.has(target) ? [target] : [];
+    }
+
+    const prefix = `${target}:`;
+    return [...this.sessions.keys()].filter((sessionKey) => sessionKey === target || sessionKey.startsWith(prefix));
   }
 
-  private async applyPendingSessionRefresh(agentName: string): Promise<string[]> {
-    const reasons = this.getAndClearPendingRefreshReasons(agentName);
+  private resolvePendingRefreshKeysForTarget(target: string): string[] {
+    if (target.includes(":")) {
+      return this.pendingSessionRefresh.has(target) ? [target] : [];
+    }
+
+    const prefix = `${target}:`;
+    return [...this.pendingSessionRefresh.keys()].filter((pendingTarget) =>
+      pendingTarget === target || pendingTarget.startsWith(prefix)
+    );
+  }
+
+  private getAndClearPendingRefreshReasons(sessionTarget: string): {
+    targets: string[];
+    reasons: string[];
+  } {
+    const agentName = sessionTarget.includes(":")
+      ? sessionTarget.slice(0, sessionTarget.indexOf(":"))
+      : sessionTarget;
+    const targetsToCheck = sessionTarget.includes(":")
+      ? [agentName, sessionTarget]
+      : [sessionTarget];
+
+    const targets: string[] = [];
+    const reasons: string[] = [];
+    for (const target of targetsToCheck) {
+      const pending = this.pendingSessionRefresh.get(target);
+      if (!pending) continue;
+      this.pendingSessionRefresh.delete(target);
+      targets.push(target);
+      reasons.push(...pending.reasons);
+    }
+
+    return { targets, reasons };
+  }
+
+  private async applyPendingSessionRefresh(sessionTarget: string): Promise<string[]> {
+    const { targets, reasons } = this.getAndClearPendingRefreshReasons(sessionTarget);
     if (reasons.length === 0) return [];
-    await this.refreshSession(agentName, reasons.join(","));
+
+    for (const target of targets) {
+      await this.refreshSession(target, reasons.join(","));
+    }
+
     return reasons;
   }
 
@@ -187,6 +370,27 @@ export class AgentExecutor {
       return 0;
     }
 
+    const runProjectScope = resolveAgentRunProjectScope({
+      db,
+      agentName: agent.name,
+      envelopes,
+    });
+
+    let runTaskId: string | undefined;
+    for (const envelope of envelopes) {
+      const taskId = readTaskIdFromEnvelopeMetadata(
+        envelope.metadata as Record<string, unknown> | undefined
+      );
+      if (!taskId) continue;
+      if (!runTaskId) {
+        runTaskId = taskId;
+        continue;
+      }
+      if (runTaskId !== taskId) {
+        throw new Error("Conflicting task context in a single agent run");
+      }
+    }
+
     // Mark envelopes done immediately after read (at-most-once).
     const envelopeIds = envelopes.map((e) => e.id);
     db.markEnvelopesDone(envelopeIds);
@@ -203,6 +407,22 @@ export class AgentExecutor {
     }
 
     const pendingRemainingCount = countDuePendingEnvelopesForAgent(db, agent.name);
+
+    if (runTaskId) {
+      const role = parseAgentRoleFromMetadata(agent.metadata);
+      if (role === "leader") {
+        const task = db.getProjectTaskById(runTaskId);
+        if (task && (task.state === "dispatched" || task.state === "executing")) {
+          db.updateProjectTaskState({
+            taskId: task.id,
+            state: "executing",
+            actor: agent.name,
+            reason: "leader-run-started",
+            assignee: agent.name,
+          });
+        }
+      }
+    }
 
     // Create run record for auditing
     const run = db.createAgentRun(agent.name, envelopeIds);
@@ -232,7 +452,7 @@ export class AgentExecutor {
       }
 
       // Get or create session
-      const session = await this.getOrCreateSession(agent, db, trigger);
+      const session = await this.getOrCreateSession(agent, db, runProjectScope, trigger);
 
       // Build turn input
       const turnInput = buildTurnInput({
@@ -252,6 +472,8 @@ export class AgentExecutor {
       logEvent("info", "agent-run-start", {
         "agent-name": agent.name,
         "agent-run-id": run.id,
+        "session-key": runProjectScope.sessionKey,
+        "project-id": runProjectScope.projectId,
         "envelopes-read-count": envelopeIds.length,
         "pending-remaining-count": pendingRemainingCount,
         "execution-mode": executionPolicy.mode,
@@ -294,7 +516,7 @@ export class AgentExecutor {
       }
 
       // Persist session handle for best-effort resume after daemon restart.
-      if (session.sessionId) {
+      if (session.sessionId && !runProjectScope.isProjectScoped) {
         try {
           writePersistedAgentSession(db, agent.name, {
             version: 1,
@@ -325,6 +547,7 @@ export class AgentExecutor {
         "agent-name": agent.name,
         "agent-run-id": run.id,
         state: "success",
+        "session-key": runProjectScope.sessionKey,
         "duration-ms": runStartedAtMs ? Date.now() - runStartedAtMs : 0,
         "context-length": turn.usage.contextLength,
         "input-tokens": turn.usage.inputTokens,
@@ -342,7 +565,7 @@ export class AgentExecutor {
         turn.usage.contextLength > policy.maxContextLength
       ) {
         await this.refreshSession(
-          agent.name,
+          runProjectScope.sessionKey,
           `max-context-length:${turn.usage.contextLength}>${policy.maxContextLength}`
         );
       }
@@ -350,6 +573,12 @@ export class AgentExecutor {
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
       db.failAgentRun(run.id, errMsg);
+      await this.notifyRunFailure({
+        agentName: agent.name,
+        runId: run.id,
+        triggeringEnvelopes: envelopes,
+        error: errMsg,
+      });
       logEvent("info", "agent-run-complete", {
         "agent-name": agent.name,
         "agent-run-id": run.id,
@@ -373,6 +602,7 @@ export class AgentExecutor {
   private async getOrCreateSession(
     agent: Agent,
     db: HiBossDatabase,
+    runProjectScope: ReturnType<typeof resolveAgentRunProjectScope>,
     trigger?: AgentRunTrigger
   ): Promise<AgentSession> {
     return await getOrCreateAgentSession({
@@ -380,6 +610,10 @@ export class AgentExecutor {
       db,
       hibossDir: this.hibossDir,
       sessions: this.sessions,
+      sessionKey: runProjectScope.sessionKey,
+      workspaceOverride: runProjectScope.workspaceOverride,
+      additionalContext: runProjectScope.additionalContext,
+      persistSessionHandle: !runProjectScope.isProjectScoped,
       applyPendingSessionRefresh: (name) => this.applyPendingSessionRefresh(name),
       refreshSession: (name, reason) => this.refreshSession(name, reason),
       getSessionPolicy: (a) => this.getSessionPolicy(a),
@@ -392,10 +626,17 @@ export class AgentExecutor {
    *
    * Clears the existing session so a new one will be created on next run.
    */
-  async refreshSession(agentName: string, reason?: string): Promise<void> {
-    this.pendingSessionRefresh.delete(agentName);
+  async refreshSession(agentNameOrSessionKey: string, reason?: string): Promise<void> {
+    const agentName = agentNameOrSessionKey.includes(":")
+      ? agentNameOrSessionKey.slice(0, agentNameOrSessionKey.indexOf(":"))
+      : agentNameOrSessionKey;
 
-    if (this.db) {
+    const pendingTargets = this.resolvePendingRefreshKeysForTarget(agentNameOrSessionKey);
+    for (const target of pendingTargets) {
+      this.pendingSessionRefresh.delete(target);
+    }
+
+    if (this.db && !agentNameOrSessionKey.includes(":")) {
       try {
         writePersistedAgentSession(this.db, agentName, null);
       } catch (err) {
@@ -407,11 +648,15 @@ export class AgentExecutor {
       }
     }
 
-    // For CLI-based sessions, there's no runtime/session to dispose — just clear the in-memory cache.
-    this.sessions.delete(agentName);
+    const removedSessionKeys = this.resolveSessionKeysForTarget(agentNameOrSessionKey);
+    for (const sessionKey of removedSessionKeys) {
+      this.sessions.delete(sessionKey);
+    }
 
     logEvent("info", "agent-session-remove", {
       "agent-name": agentName,
+      "session-target": agentNameOrSessionKey,
+      "session-count": removedSessionKeys.length,
       reason,
       state: "success",
     });
@@ -422,7 +667,7 @@ export class AgentExecutor {
    */
   async closeAll(): Promise<void> {
     // Kill any in-flight CLI processes
-    for (const [agentName, inFlight] of this.inFlightRuns) {
+    for (const [, inFlight] of this.inFlightRuns) {
       if (inFlight.childProcess) {
         try {
           inFlight.childProcess.kill("SIGTERM");
@@ -439,6 +684,7 @@ export class AgentExecutor {
 
 export function createAgentExecutor(options?: {
   db?: HiBossDatabase;
+  router?: AgentRunNotificationRouter;
   hibossDir?: string;
   onEnvelopesDone?: (envelopeIds: string[], db: HiBossDatabase) => void | Promise<void>;
 }): AgentExecutor {

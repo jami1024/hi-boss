@@ -8,6 +8,7 @@ export type ProviderExecutionMode = "full-access" | "workspace-sandbox";
 export interface ResolvedExecutionPolicy {
   mode: ProviderExecutionMode;
   reason:
+    | "project-scoped-sandbox"
     | "untrusted-channel-input"
     | "trusted-agent-input"
     | "trusted-boss-channel-input"
@@ -42,6 +43,18 @@ function hasUntrustedChannelInput(envelopes: Envelope[]): boolean {
       return true;
     }
     if (from.type === "channel" && !envelope.fromBoss) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasProjectScopedContext(envelopes: Envelope[]): boolean {
+  for (const envelope of envelopes) {
+    const metadata = envelope.metadata;
+    if (!metadata || typeof metadata !== "object") continue;
+    const projectId = (metadata as Record<string, unknown>).projectId;
+    if (typeof projectId === "string" && projectId.trim().length > 0) {
       return true;
     }
   }
@@ -89,6 +102,13 @@ export function resolveTurnExecutionPolicy(params: {
   envelopes: Envelope[];
 }): ResolvedExecutionPolicy {
   const permissionLevel = normalizePermissionLevel(params.permissionLevel);
+  if (hasProjectScopedContext(params.envelopes)) {
+    return {
+      mode: "workspace-sandbox",
+      reason: "project-scoped-sandbox",
+    };
+  }
+
   if (hasUntrustedChannelInput(params.envelopes)) {
     return {
       mode: "workspace-sandbox",

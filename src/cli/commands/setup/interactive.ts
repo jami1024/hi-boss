@@ -92,19 +92,28 @@ export async function runInteractiveSetup(): Promise<void> {
     default: "telegram",
   });
 
-  const adapterBossIdPrompt =
-    adapterType === "telegram"
-      ? "Your Telegram username (to identify you as the boss):"
-      : "Your Feishu user id/open id (to identify you as the boss):";
-  const adapterBossIdRequiredMessage =
-    adapterType === "telegram" ? "Telegram username is required" : "Feishu user id/open id is required";
-  const rawAdapterBossId = (
-    await input({
-      message: adapterBossIdPrompt,
-      validate: (value) => (value.trim().length === 0 ? adapterBossIdRequiredMessage : true),
-    })
-  ).trim();
-  const adapterBossId = adapterType === "telegram" ? rawAdapterBossId.replace(/^@/, "") : rawAdapterBossId;
+  let adapterBossId = "";
+  let adapterToken = "";
+
+  if (adapterType === "web") {
+    // Web adapter is built-in; no external token or boss ID needed.
+    adapterBossId = "boss";
+    adapterToken = "web-builtin";
+  } else {
+    const adapterBossIdPrompt =
+      adapterType === "telegram"
+        ? "Your Telegram username (to identify you as the boss):"
+        : "Your Feishu user id/open id (to identify you as the boss):";
+    const adapterBossIdRequiredMessage =
+      adapterType === "telegram" ? "Telegram username is required" : "Feishu user id/open id is required";
+    const rawAdapterBossId = (
+      await input({
+        message: adapterBossIdPrompt,
+        validate: (value) => (value.trim().length === 0 ? adapterBossIdRequiredMessage : true),
+      })
+    ).trim();
+    adapterBossId = adapterType === "telegram" ? rawAdapterBossId.replace(/^@/, "") : rawAdapterBossId;
+  }
 
   console.log("\n🔐 Boss Token\n");
   console.log("The boss token identifies you as the boss for administrative tasks.");
@@ -167,30 +176,32 @@ export async function runInteractiveSetup(): Promise<void> {
     console.log("   1. Open Telegram and search for @BotFather");
     console.log("   2. Send /newbot and follow the instructions");
     console.log("   3. Copy the bot token (looks like: 123456789:ABCdef...)\n");
-  } else {
+  } else if (adapterType === "feishu") {
     console.log("\n📱 Feishu Binding\n");
     console.log("\n📋 Feishu adapter token format:");
     console.log("   - app_id:app_secret");
     console.log("   - or JSON with app_id/app_secret and optional webhook fields\n");
   }
 
-  const adapterToken = (
-    await input({
-      message: adapterType === "telegram" ? "Enter your Telegram bot token:" : "Enter your Feishu adapter token:",
-      validate: (value) => {
-        const trimmed = value.trim();
-        if (!trimmed) {
-          return "Adapter token is required";
-        }
-        if (adapterType === "telegram") {
-          return /^\d+:[A-Za-z0-9_-]+$/.test(trimmed)
-            ? true
-            : "Invalid token format. Should look like: 123456789:ABCdef...";
-        }
-        return true;
-      },
-    })
-  ).trim();
+  if (adapterType !== "web") {
+    adapterToken = (
+      await input({
+        message: adapterType === "telegram" ? "Enter your Telegram bot token:" : "Enter your Feishu adapter token:",
+        validate: (value) => {
+          const trimmed = value.trim();
+          if (!trimmed) {
+            return "Adapter token is required";
+          }
+          if (adapterType === "telegram") {
+            return /^\d+:[A-Za-z0-9_-]+$/.test(trimmed)
+              ? true
+              : "Invalid token format. Should look like: 123456789:ABCdef...";
+          }
+          return true;
+        },
+      })
+    ).trim();
+  }
 
   console.log("\n🧭 Leader Information (delegation/orchestration)\n");
 
@@ -287,8 +298,14 @@ export async function runInteractiveSetup(): Promise<void> {
     console.log(`   boss-token:  ${bossToken}`);
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     console.log("\n⚠️  Save these tokens! They won't be shown again.\n");
-    console.log(`📱 ${adapterType} adapter is configured. Start the daemon with:`);
-    console.log("   hiboss daemon start\n");
+    if (adapterType === "web") {
+      console.log("🌐 Web adapter is built-in. Start the daemon with:");
+      console.log("   hiboss daemon start");
+      console.log(`\n   Then open http://localhost:7749 and log in with your boss token.\n`);
+    } else {
+      console.log(`📱 ${adapterType} adapter is configured. Start the daemon with:`);
+      console.log("   hiboss daemon start\n");
+    }
   } catch (err) {
     const error = err as Error;
     console.error(`\n❌ Setup failed: ${error.message}\n`);

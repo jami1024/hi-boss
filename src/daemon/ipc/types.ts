@@ -5,6 +5,7 @@
 import type { Envelope } from "../../envelope/types.js";
 import type { AgentRole } from "../../shared/agent-role.js";
 import type { Project, ProjectLeaderCandidate } from "../../shared/project.js";
+import type { RemoteSkillRecord } from "../../skill/remote-skill-manager.js";
 import type { WorkItem, WorkItemState } from "../../shared/work-item.js";
 
 export interface JsonRpcRequest {
@@ -159,6 +160,70 @@ export interface ProjectSelectLeaderResult {
   candidates: ProjectLeaderCandidate[];
 }
 
+export interface SkillRemoteTargetParams {
+  agentName?: string;
+  projectId?: string;
+}
+
+export interface SkillRemoteAddParams extends SkillRemoteTargetParams {
+  token: string;
+  skillName: string;
+  sourceUrl: string;
+  ref?: string;
+}
+
+export interface SkillRemoteListParams extends SkillRemoteTargetParams {
+  token: string;
+}
+
+export interface SkillRemoteUpdateParams extends SkillRemoteTargetParams {
+  token: string;
+  skillName: string;
+  sourceUrl?: string;
+  ref?: string;
+}
+
+export interface SkillRemoteRemoveParams extends SkillRemoteTargetParams {
+  token: string;
+  skillName: string;
+}
+
+export interface SkillRemoteResult {
+  targetType: "agent" | "project";
+  targetId: string;
+}
+
+export interface SkillRemoteRefreshRequest {
+  agentName: string;
+  scope: "agent" | "project";
+  projectId?: string;
+}
+
+export interface SkillRemoteRefreshSummary {
+  count: number;
+  requested: SkillRemoteRefreshRequest[];
+}
+
+export interface SkillRemoteAddResult extends SkillRemoteResult {
+  skill: RemoteSkillRecord;
+  refresh: SkillRemoteRefreshSummary;
+}
+
+export interface SkillRemoteListResult extends SkillRemoteResult {
+  skills: RemoteSkillRecord[];
+}
+
+export interface SkillRemoteUpdateResult extends SkillRemoteResult {
+  skill: RemoteSkillRecord;
+  refresh: SkillRemoteRefreshSummary;
+}
+
+export interface SkillRemoteRemoveResult extends SkillRemoteResult {
+  success: boolean;
+  skillName: string;
+  refresh: SkillRemoteRefreshSummary;
+}
+
 export interface CronCreateParams {
   token: string;
   cron: string;
@@ -242,6 +307,7 @@ export interface AgentUnbindParams {
 export interface AgentRefreshParams {
   token: string;
   agentName: string;
+  projectId?: string;
 }
 
 export interface AgentSelfParams {
@@ -304,6 +370,8 @@ export interface AgentStatusResult {
     currentRun?: {
       id: string;
       startedAt: number;
+      sessionTarget?: string;
+      projectId?: string;
     };
     lastRun?: {
       id: string;
@@ -382,9 +450,7 @@ export interface DaemonTimeResult {
 
 // ==================== Setup Parameters ====================
 
-export interface SetupCheckParams {
-  // No params needed
-}
+export type SetupCheckParams = Record<string, never>;
 
 export interface SetupCheckResult {
   completed: boolean;

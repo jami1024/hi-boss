@@ -54,6 +54,7 @@ export class MessageRouter {
    * Route a new envelope to its destination.
    */
   async routeEnvelope(input: CreateEnvelopeInput): Promise<Envelope> {
+    this.validateProjectScopedRoute(input);
     const envelope = this.db.createEnvelope(input);
 
     const source = getEnvelopeSourceFromCreateInput(input);
@@ -81,6 +82,96 @@ export class MessageRouter {
       await this.deliverEnvelope(envelope);
     }
     return envelope;
+  }
+
+  private validateProjectScopedRoute(input: CreateEnvelopeInput): void {
+    const metadata = input.metadata;
+    const projectIdRaw =
+      metadata && typeof metadata === "object"
+        ? (metadata as Record<string, unknown>).projectId
+        : undefined;
+    const taskIdRaw =
+      metadata && typeof metadata === "object"
+        ? (metadata as Record<string, unknown>).taskId
+        : undefined;
+    if (typeof projectIdRaw !== "string" || projectIdRaw.trim().length === 0) {
+      return;
+    }
+    const hasTaskId = typeof taskIdRaw === "string" && taskIdRaw.trim().length > 0;
+
+    const projectId = projectIdRaw.trim();
+    const project = this.db.getProjectById(projectId);
+    if (!project) {
+      const err = new Error(`Project '${projectId}' not found`) as Error & { code?: number };
+      err.code = RPC_ERRORS.NOT_FOUND;
+      throw err;
+    }
+
+    const rejectProjectScopedRoute = (message: string, reason: string): never => {
+      logEvent("warn", "project-route-violation", {
+        reason,
+        "project-id": project.id,
+        from: input.from,
+        to: input.to,
+      });
+      const err = new Error(message) as Error & { code?: number };
+      err.code = RPC_ERRORS.UNAUTHORIZED;
+      throw err;
+    };
+
+    const sender = parseAddress(input.from);
+    const target = parseAddress(input.to);
+
+    if (target.type !== "agent") {
+      return;
+    }
+
+    if (sender.type !== "agent") {
+      if (target.agentName !== project.speakerAgent) {
+        rejectProjectScopedRoute(
+          `In project context, channel messages can only target speaker '${project.speakerAgent}'`,
+          "channel-target-not-speaker"
+        );
+      }
+      return;
+    }
+
+    const activeLeaders = this.db.listProjectLeaders(project.id, { activeOnly: true });
+    const activeLeaderNames = activeLeaders.map((leader) => leader.agentName);
+    const senderName = sender.agentName;
+    const targetName = target.agentName;
+    const isSenderMember = senderName === project.speakerAgent || activeLeaderNames.includes(senderName);
+    if (!isSenderMember) {
+      rejectProjectScopedRoute(
+        `Agent '${senderName}' is not a member of project '${project.name}'`,
+        "sender-not-project-member"
+      );
+    }
+
+    const senderLeader = activeLeaders.find((leader) => leader.agentName === senderName);
+    const isTargetAllowed = targetName === project.speakerAgent || activeLeaderNames.includes(targetName);
+    if (!isTargetAllowed) {
+      rejectProjectScopedRoute(
+        `Agent '${targetName}' is not an active leader of project '${project.name}'`,
+        "target-not-active-leader"
+      );
+    }
+
+    if (senderLeader && targetName !== project.speakerAgent && !hasTaskId) {
+      rejectProjectScopedRoute(
+        `Leader '${senderName}' cannot dispatch to '${targetName}' without task context in project '${project.name}'`,
+        "leader-dispatch-without-task-id"
+      );
+    }
+
+    if (senderLeader?.allowDispatchTo && targetName !== project.speakerAgent) {
+      if (!senderLeader.allowDispatchTo.includes(targetName)) {
+        rejectProjectScopedRoute(
+          `Leader '${senderName}' cannot dispatch to '${targetName}' in project '${project.name}'`,
+          "leader-dispatch-not-allowed"
+        );
+      }
+    }
   }
 
   /**
@@ -210,6 +301,13 @@ export class MessageRouter {
       });
     }
 
+    // Web boss channel is delivered through the built-in web server path.
+    // Only the canonical chat id is allowed; unknown web chat ids keep failing.
+    if (adapterType === "web" && chatId === "boss") {
+      await this.completeDeliveredEnvelope(envelope);
+      return;
+    }
+
     // Get the adapter by token
     const adapter = this.adaptersByToken.get(binding.adapterToken);
     if (!adapter) {
@@ -246,18 +344,7 @@ export class MessageRouter {
         parseMode,
         replyToMessageId,
       });
-      this.db.updateEnvelopeStatus(envelope.id, "done");
-
-      if (this.onEnvelopeDone) {
-        try {
-          await this.onEnvelopeDone(envelope);
-        } catch (err) {
-          logEvent("error", "router-on-envelope-done-failed", {
-            "envelope-id": envelope.id,
-            error: errorMessage(err),
-          });
-        }
-      }
+      await this.completeDeliveredEnvelope(envelope);
     } catch (err) {
       const details = this.extractAdapterErrorDetails(adapterType, err);
       const msg = `Delivery to ${adapterType}:${chatId} failed: ${details.summary}`;
@@ -287,6 +374,21 @@ export class MessageRouter {
         adapterError: details,
         reason: "send-failed",
       });
+    }
+  }
+
+  private async completeDeliveredEnvelope(envelope: Envelope): Promise<void> {
+    this.db.updateEnvelopeStatus(envelope.id, "done");
+
+    if (this.onEnvelopeDone) {
+      try {
+        await this.onEnvelopeDone(envelope);
+      } catch (err) {
+        logEvent("error", "router-on-envelope-done-failed", {
+          "envelope-id": envelope.id,
+          error: errorMessage(err),
+        });
+      }
     }
   }
 

@@ -54,6 +54,14 @@ Each tick does:
    - The scheduler calls `executor.checkAndRun(agent, db)` (non-blocking)
    - If an envelope is addressed to a missing/deleted agent (`to = agent:<name>` with no corresponding agent record), the scheduler marks those due pending envelopes `done` (terminal) and records `last-delivery-error-*` to prevent infinite pending loops
    - Orphan cleanup is batched (`100`) and capped per tick (`2000`); if the cap is hit and more due orphan envelopes remain, the scheduler queues an immediate follow-up tick to continue cleanup
+3. **Stalled project task recovery (Phase 3)**
+   - Scheduler scans active `project_tasks` (`state NOT IN ('completed','cancelled')`)
+   - Stalled condition: `now - max(last task_progress timestamp, last state-transition timestamp) > stallThresholdSec`, and assignee has no running `agent_run`
+   - Recovery stages:
+     - Stage 1 retry: enqueue retry envelope to current assignee (`metadata.type = stall-retry`)
+     - Stage 2 notify boss: speaker notifies `channel:web:boss` (`metadata.type = stall-notify-boss`)
+     - Stage 3 rollback (optional): set task back to `planning`, clear assignee, re-dispatch to speaker (`metadata.type = stall-rollback`)
+   - Policy source: `config.stall_policy` (JSON), or project override key `project_stall_policy:<project-id>`
 
 The scheduler then computes the next wake time.
 

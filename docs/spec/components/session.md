@@ -105,7 +105,7 @@ Session resume uses a small record stored in `agents.metadata.sessionHandle`:
 Notes:
 - The record is updated after successful runs (best-effort).
 - `handle.metadata` is provider-specific; for Codex it can include `codexCumulativeUsage` to compute per-turn token usage deltas from cumulative `turn.completed.usage` totals.
-- A manual refresh (`/new`) or policy refresh clears the persisted handle so the next run starts fresh.
+- A manual refresh (`/new`/`agent.refresh`) or policy refresh clears the persisted handle for agent-scoped refreshes; project-scoped refreshes (`/new <project-id>` or `agent.refresh` with `projectId`) target only `<agent>:<projectId>` in-memory sessions.
 - If the agent’s configured provider changes while a persisted handle exists, Hi-Boss may still resume the legacy provider session (best-effort) until the session is refreshed.
 
 ## Daemon Restart Recovery

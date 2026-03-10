@@ -9,7 +9,20 @@ import {
 import { formatUnixMsAsTimeZoneOffset } from "../shared/time.js";
 import { formatShortId } from "../shared/id-format.js";
 
-type EnrichedChannelCommand = ChannelCommand & { agentName?: string };
+type EnrichedChannelCommand = ChannelCommand & { agentName?: string; platform?: string };
+
+const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{1,63}$/;
+const CHANNEL_PROJECT_CONTEXT_KEY_PREFIX = "channel_project_context";
+
+function buildChannelProjectContextKey(platform: string, chatId: string, agentName: string): string {
+  return `${CHANNEL_PROJECT_CONTEXT_KEY_PREFIX}:${platform}:${chatId}:${agentName}`;
+}
+
+function normalizeProjectId(value: string): string | null {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || !PROJECT_ID_PATTERN.test(normalized)) return null;
+  return normalized;
+}
 
 function buildAgentStatusText(params: { db: HiBossDatabase; executor: AgentExecutor; agentName: string }): string {
   const agent = params.db.getAgentByNameCaseInsensitive(params.agentName);
@@ -103,7 +116,44 @@ export function createChannelCommandHandler(params: {
     if (typeof c.command !== "string") return;
 
     if (c.command === "new" && typeof c.agentName === "string" && c.agentName) {
-      params.executor.requestSessionRefresh(c.agentName, "telegram:/new");
+      const contextKey =
+        typeof c.platform === "string" && c.platform.trim() && c.chatId.trim()
+          ? buildChannelProjectContextKey(c.platform.trim(), c.chatId.trim(), c.agentName)
+          : null;
+
+      const rawProjectId = typeof c.args === "string" ? c.args.trim() : "";
+      if (!rawProjectId) {
+        if (contextKey) {
+          params.db.setConfig(contextKey, "");
+        }
+        params.executor.requestSessionRefresh(c.agentName, "telegram:/new", "auto-project");
+        return { text: "Session refresh requested." };
+      }
+
+      const projectId = normalizeProjectId(rawProjectId);
+      if (!projectId) {
+        return {
+          text: "error: Invalid project-id (expected lowercase letters/numbers with optional . _ : -)",
+        };
+      }
+
+      const project = params.db.getProjectById(projectId);
+      if (!project) {
+        return { text: "error: Project not found" };
+      }
+
+      const isProjectMember =
+        project.speakerAgent === c.agentName ||
+        params.db.listProjectLeaders(project.id, { activeOnly: false }).some((leader) => leader.agentName === c.agentName);
+      if (!isProjectMember) {
+        return { text: `error: Agent '${c.agentName}' is not bound to project '${project.id}'` };
+      }
+
+      if (contextKey) {
+        params.db.setConfig(contextKey, project.id);
+      }
+
+      params.executor.requestSessionRefresh(c.agentName, "telegram:/new", "project", project.id);
       return { text: "Session refresh requested." };
     }
 

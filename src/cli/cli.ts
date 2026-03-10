@@ -24,6 +24,10 @@ import {
   listProjects,
   getProject,
   selectProjectLeader,
+  addRemoteSkill,
+  listRemoteSkill,
+  updateRemoteSkillCommand,
+  removeRemoteSkillCommand,
 } from "./commands/index.js";
 import { registerAgentCommands } from "./cli-agent.js";
 
@@ -73,11 +77,15 @@ daemon
     "Apply/reconcile setup config before start and record it for auto-load"
   )
   .option("--debug", "Include debug fields in daemon.log")
+  .option("--web-port <port>", "Web UI port (default: 7749)", parseInt)
+  .option("--no-web", "Disable the Web UI")
   .action((options) => {
     startDaemon({
       token: options.token,
       configFile: options.configFile,
       debug: Boolean(options.debug),
+      webPort: options.webPort,
+      webEnabled: options.web !== false,
     });
   });
 
@@ -461,6 +469,81 @@ project
       token: options.token,
       projectId: options.projectId,
       requiredCapabilities: options.requireCapability,
+    });
+  });
+
+const skill = program
+  .command("skill")
+  .description("Remote skill management")
+  .helpCommand(false);
+
+skill
+  .command("add-remote")
+  .description("Download and install a remote skill")
+  .requiredOption("--name <skill-name>", "Skill name")
+  .requiredOption("--source <url>", "Remote source URL (github.com or raw.githubusercontent.com)")
+  .option("--ref <ref>", "Git ref override (branch/tag/commit)")
+  .option("--agent <name>", "Target agent name")
+  .option("--project-id <id>", "Target project id")
+  .option("--token <token>", "Token (defaults to HIBOSS_TOKEN)")
+  .action((options) => {
+    addRemoteSkill({
+      token: options.token,
+      skillName: options.name,
+      sourceUrl: options.source,
+      ref: options.ref,
+      agentName: options.agent,
+      projectId: options.projectId,
+    });
+  });
+
+skill
+  .command("list-remote")
+  .description("List installed remote skills")
+  .option("--agent <name>", "Target agent name")
+  .option("--project-id <id>", "Target project id")
+  .option("--token <token>", "Token (defaults to HIBOSS_TOKEN)")
+  .action((options) => {
+    listRemoteSkill({
+      token: options.token,
+      agentName: options.agent,
+      projectId: options.projectId,
+    });
+  });
+
+skill
+  .command("update-remote")
+  .description("Update an installed remote skill")
+  .requiredOption("--name <skill-name>", "Skill name")
+  .option("--source <url>", "Remote source URL override")
+  .option("--ref <ref>", "Git ref override")
+  .option("--agent <name>", "Target agent name")
+  .option("--project-id <id>", "Target project id")
+  .option("--token <token>", "Token (defaults to HIBOSS_TOKEN)")
+  .action((options) => {
+    updateRemoteSkillCommand({
+      token: options.token,
+      skillName: options.name,
+      sourceUrl: options.source,
+      ref: options.ref,
+      agentName: options.agent,
+      projectId: options.projectId,
+    });
+  });
+
+skill
+  .command("remove-remote")
+  .description("Remove an installed remote skill")
+  .requiredOption("--name <skill-name>", "Skill name")
+  .option("--agent <name>", "Target agent name")
+  .option("--project-id <id>", "Target project id")
+  .option("--token <token>", "Token (defaults to HIBOSS_TOKEN)")
+  .action((options) => {
+    removeRemoteSkillCommand({
+      token: options.token,
+      skillName: options.name,
+      agentName: options.agent,
+      projectId: options.projectId,
     });
   });
 

@@ -10,7 +10,6 @@ import type {
 import { RPC_ERRORS } from "../ipc/types.js";
 import type { DaemonContext } from "./context.js";
 import { requireToken, rpcError } from "./context.js";
-import { normalizeWorkspacePath } from "./work-item-orchestration.js";
 
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{1,63}$/;
 
@@ -126,13 +125,11 @@ export function createProjectHandlers(ctx: DaemonContext): RpcMethodRegistry {
     }
 
     const requiredCapabilities = parseCapabilityValues(p.requiredCapabilities);
-    const projectRoot = normalizeWorkspacePath(project.root);
     const candidates = ctx.db
       .listProjectLeaders(project.id, { activeOnly: true })
       .map((leader) => {
         const agent = ctx.db.getAgentByNameCaseInsensitive(leader.agentName);
         if (!agent) return null;
-        if (!agent.workspace || normalizeWorkspacePath(agent.workspace) !== projectRoot) return null;
 
         const lastRun = ctx.db.getLastFinishedAgentRun(agent.name);
         const agentHealth: "ok" | "unknown" | "error" =

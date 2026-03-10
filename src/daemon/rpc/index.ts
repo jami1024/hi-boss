@@ -15,3 +15,4 @@ export { createAgentSetHandler } from "./agent-set-handler.js";
 export { createAgentDeleteHandler } from "./agent-delete-handler.js";
 export { createWorkItemHandlers } from "./work-item-handlers.js";
 export { createProjectHandlers } from "./project-handlers.js";
+export { createSkillHandlers } from "./skill-handlers.js";

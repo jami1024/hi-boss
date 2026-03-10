@@ -99,6 +99,11 @@ export const DEFAULT_PERMISSION_POLICY: PermissionPolicyV1 = {
     "project.get": "restricted",
     "project.select-leader": "restricted",
 
+    "skill.remote.add": "boss",
+    "skill.remote.list": "boss",
+    "skill.remote.update": "boss",
+    "skill.remote.remove": "boss",
+
     // Daemon read-only
     "daemon.status": "boss",
     "daemon.ping": "standard",

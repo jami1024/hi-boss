@@ -245,11 +245,14 @@ export function createSetupHandlers(ctx: DaemonContext): RpcMethodRegistry {
       if (!isSupportedAdapterType(p.adapter.adapterType)) {
         rpcError(RPC_ERRORS.INVALID_PARAMS, `Unknown adapter type: ${p.adapter.adapterType}`);
       }
-      if (typeof p.adapter.adapterToken !== "string" || !p.adapter.adapterToken.trim()) {
-        rpcError(RPC_ERRORS.INVALID_PARAMS, "Invalid adapter-token");
-      }
-      if (typeof p.adapter.adapterBossId !== "string" || !p.adapter.adapterBossId.trim()) {
-        rpcError(RPC_ERRORS.INVALID_PARAMS, "Invalid adapter-boss-id");
+      const isWebAdapter = p.adapter.adapterType === "web";
+      if (!isWebAdapter) {
+        if (typeof p.adapter.adapterToken !== "string" || !p.adapter.adapterToken.trim()) {
+          rpcError(RPC_ERRORS.INVALID_PARAMS, "Invalid adapter-token");
+        }
+        if (typeof p.adapter.adapterBossId !== "string" || !p.adapter.adapterBossId.trim()) {
+          rpcError(RPC_ERRORS.INVALID_PARAMS, "Invalid adapter-boss-id");
+        }
       }
 
       if (typeof p.bossToken !== "string" || p.bossToken.trim().length < 4) {
@@ -267,12 +270,13 @@ export function createSetupHandlers(ctx: DaemonContext): RpcMethodRegistry {
 
       // If an adapter is provided and the daemon is running, create/start it first.
       // This validates adapter credentials and avoids committing setup state if startup fails.
-      const adapterToken = p.adapter.adapterToken.trim();
+      // Web adapter is built-in and doesn't need external adapter creation.
+      const adapterToken = (p.adapter.adapterToken ?? "").trim();
       const adapterType = p.adapter.adapterType.trim();
-      const hadAdapterAlready = ctx.adapters.has(adapterToken);
+      const hadAdapterAlready = adapterToken ? ctx.adapters.has(adapterToken) : false;
       let createdAdapterForSetup = false;
 
-      if (ctx.running) {
+      if (ctx.running && !isWebAdapter) {
         try {
           const adapter = await ctx.createAdapterForBinding(adapterType, adapterToken);
           if (!adapter) {
@@ -349,15 +353,17 @@ export function createSetupHandlers(ctx: DaemonContext): RpcMethodRegistry {
             metadata: leaderMetadata,
           });
 
-          // Create adapter binding if provided
-          ctx.db.createBinding(speakerAgentName, p.adapter.adapterType, p.adapter.adapterToken);
+          // Create adapter binding if provided (skip for web - it's built-in)
+          if (!isWebAdapter) {
+            ctx.db.createBinding(speakerAgentName, p.adapter.adapterType, p.adapter.adapterToken);
 
-          // Store boss ID for this adapter
-          const normalizedBossId =
-            p.adapter.adapterType === "telegram"
-              ? p.adapter.adapterBossId.trim().replace(/^@/, "")
-              : p.adapter.adapterBossId.trim();
-          ctx.db.setAdapterBossId(p.adapter.adapterType, normalizedBossId);
+            // Store boss ID for this adapter
+            const normalizedBossId =
+              p.adapter.adapterType === "telegram"
+                ? p.adapter.adapterBossId.trim().replace(/^@/, "")
+                : p.adapter.adapterBossId.trim();
+            ctx.db.setAdapterBossId(p.adapter.adapterType, normalizedBossId);
+          }
 
           // Set boss token
           ctx.db.setBossToken(p.bossToken.trim());

@@ -2,22 +2,16 @@
  * Hi-Boss daemon - manages agents, messages, and platform integrations.
  */
 
-import * as path from "path";
-import { HiBossDatabase } from "./db/database.js";
-import { IpcServer } from "./ipc/server.js";
-import { MessageRouter } from "./router/message-router.js";
-import { ChannelBridge } from "./bridges/channel-bridge.js";
-import { AgentExecutor, createAgentExecutor } from "../agent/executor.js";
+import * as path from "node:path";
 import { type BackgroundExecutor, createBackgroundExecutor } from "../agent/background-executor.js";
+import { type AgentExecutor, createAgentExecutor } from "../agent/executor.js";
 import type { Agent } from "../agent/types.js";
-import { EnvelopeScheduler } from "./scheduler/envelope-scheduler.js";
-import { CronScheduler } from "./scheduler/cron-scheduler.js";
-import type { RpcMethodRegistry } from "./ipc/types.js";
-import { RPC_ERRORS } from "./ipc/types.js";
 import type { ChatAdapter } from "../adapters/types.js";
-import { TelegramAdapter } from "../adapters/telegram.adapter.js";
 import { FeishuAdapter } from "../adapters/feishu.adapter.js";
+import { TelegramAdapter } from "../adapters/telegram.adapter.js";
+import { getEnvelopeSourceFromEnvelope } from "../envelope/source.js";
 import { BACKGROUND_AGENT_NAME, DEFAULT_AGENT_PERMISSION_LEVEL } from "../shared/defaults.js";
+import { errorMessage, logEvent, setDaemonLogTimeZone } from "../shared/daemon-log.js";
 import { getHiBossPaths } from "../shared/hiboss-paths.js";
 import {
   DEFAULT_PERMISSION_POLICY,
@@ -27,11 +21,18 @@ import {
   isAtLeastPermissionLevel,
   parsePermissionPolicyV1OrDefault,
 } from "../shared/permissions.js";
-import { errorMessage, logEvent, setDaemonLogTimeZone } from "../shared/daemon-log.js";
-import { getEnvelopeSourceFromEnvelope } from "../envelope/source.js";
+import { WebServer, DEFAULT_WEB_PORT, type WebServerConfig } from "../web/server.js";
+import { ChannelBridge } from "./bridges/channel-bridge.js";
+import { HiBossDatabase } from "./db/database.js";
+import type { RpcMethodRegistry } from "./ipc/types.js";
+import { RPC_ERRORS } from "./ipc/types.js";
+import { IpcServer } from "./ipc/server.js";
 import { PidLock, isDaemonRunning, isSocketAcceptingConnections } from "./pid-lock.js";
 import type { DaemonContext, Principal } from "./rpc/context.js";
 import { rpcError } from "./rpc/context.js";
+import { MessageRouter } from "./router/message-router.js";
+import { CronScheduler } from "./scheduler/cron-scheduler.js";
+import { EnvelopeScheduler } from "./scheduler/envelope-scheduler.js";
 import {
   createDaemonHandlers,
   createReactionHandlers,
@@ -43,6 +44,7 @@ import {
   createAgentDeleteHandler,
   createWorkItemHandlers,
   createProjectHandlers,
+  createSkillHandlers,
 } from "./rpc/index.js";
 import { createChannelCommandHandler } from "./channel-commands.js";
 import { buildMissingAgentRolesGuidance } from "../shared/agent-role.js";
@@ -74,6 +76,8 @@ export interface DaemonConfig {
   boss?: {
     telegram?: string;
   };
+  /** Web UI configuration. */
+  web?: WebServerConfig;
 }
 
 /**
@@ -111,6 +115,8 @@ export class Daemon {
   private startTimeMs: number | null = null;
   private pidLock: PidLock;
   private defaultPermissionPolicy: PermissionPolicyV1 = DEFAULT_PERMISSION_POLICY;
+  private webServer: WebServer | null = null;
+  private rpcMethods: RpcMethodRegistry = {};
 
   constructor(private config: DaemonConfig = getDefaultConfig()) {
     const dbPath = path.join(config.daemonDir, "hiboss.db");
@@ -126,6 +132,7 @@ export class Daemon {
     this.bridge = new ChannelBridge(this.router, this.db, config);
     this.executor = createAgentExecutor({
       db: this.db,
+      router: this.router,
       hibossDir: config.dataDir,
       onEnvelopesDone: (envelopeIds) => this.cronScheduler?.onEnvelopesDone(envelopeIds),
     });
@@ -192,6 +199,7 @@ export class Daemon {
       createAdapterForBinding: (type, token) => this.createAdapterForBinding(type, token),
       removeAdapter: (token) => this.removeAdapter(token),
       registerAgentHandler: (name) => this.registerSingleAgentHandler(name),
+      rpcHandlers: this.rpcMethods,
     };
   }
 
@@ -290,6 +298,11 @@ export class Daemon {
 
       // Process any pending envelopes from before restart
       await this.processPendingEnvelopes();
+
+      // Start web server (after everything else is ready)
+      const webConfig = this.config.web ?? { port: DEFAULT_WEB_PORT, enabled: true };
+      this.webServer = new WebServer(webConfig, this.createContext());
+      await this.webServer.start();
     } catch (err) {
       // Best-effort cleanup to avoid leaving stale pid/socket files.
       await this.stop().catch(() => {});
@@ -301,6 +314,7 @@ export class Daemon {
     logEvent("info", "daemon-started", {
       "data-dir": this.config.dataDir,
       "adapters-count": this.adapters.size,
+      ...(this.webServer?.isEnabled() ? { "web-port": this.webServer.getPort() } : {}),
     });
   }
 
@@ -404,6 +418,9 @@ export class Daemon {
       case "feishu":
         adapter = new FeishuAdapter(adapterToken);
         break;
+      case "web":
+        // Web channel is built-in (web UI/WebSocket path), no external adapter to load.
+        return null;
       default:
         logEvent("error", "adapter-unknown-type", { "adapter-type": adapterType });
         return null;
@@ -438,6 +455,11 @@ export class Daemon {
 
     // Stop scheduler first (prevents new work while shutting down)
     this.scheduler.stop();
+
+    // Stop web server
+    if (this.webServer) {
+      await this.webServer.stop();
+    }
 
     // Stop all adapters
     for (const adapter of this.adapters.values()) {
@@ -482,10 +504,12 @@ export class Daemon {
       ...createAgentDeleteHandler(ctx),
       ...createWorkItemHandlers(ctx),
       ...createProjectHandlers(ctx),
+      ...createSkillHandlers(ctx),
       ...createDaemonHandlers(ctx),
       ...createSetupHandlers(ctx),
     };
 
     this.ipc.registerMethods(methods);
+    this.rpcMethods = methods;
   }
 }

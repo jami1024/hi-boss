@@ -41,6 +41,11 @@ interface AgentDeleteResult {
   agentName: string;
 }
 
+interface AgentRefreshResult {
+  success: boolean;
+  agentName: string;
+}
+
 export interface RegisterAgentOptions {
   token?: string;
   name: string;
@@ -74,6 +79,12 @@ export interface AgentStatusOptions {
 export interface AgentAbortOptions {
   token?: string;
   name: string;
+}
+
+export interface AgentRefreshOptions {
+  token?: string;
+  name: string;
+  projectId?: string;
 }
 
 export interface ListAgentsOptions {
@@ -326,6 +337,12 @@ export async function agentStatus(options: AgentStatusOptions): Promise<void> {
       console.log(
         `current-run-started-at: ${formatUnixMsAsTimeZoneOffset(result.status.currentRun.startedAt, time.bossTimezone)}`
       );
+      if (typeof result.status.currentRun.sessionTarget === "string" && result.status.currentRun.sessionTarget) {
+        console.log(`current-session-target: ${result.status.currentRun.sessionTarget}`);
+      }
+      if (typeof result.status.currentRun.projectId === "string" && result.status.currentRun.projectId) {
+        console.log(`current-project-id: ${result.status.currentRun.projectId}`);
+      }
     }
 
     if (!result.status.lastRun) {
@@ -350,6 +367,30 @@ export async function agentStatus(options: AgentStatusOptions): Promise<void> {
     ) {
       console.log(`last-run-error: ${result.status.lastRun.error}`);
     }
+  } catch (err) {
+    console.error("error:", (err as Error).message);
+    process.exit(1);
+  }
+}
+
+export async function refreshAgent(options: AgentRefreshOptions): Promise<void> {
+  if (!isValidAgentName(options.name)) {
+    console.error("error:", AGENT_NAME_ERROR_MESSAGE);
+    process.exit(1);
+  }
+
+  const config = getDefaultConfig();
+  const client = new IpcClient(getSocketPath(config));
+
+  try {
+    const result = await client.call<AgentRefreshResult>("agent.refresh", {
+      token: resolveToken(options.token),
+      agentName: options.name,
+      ...(options.projectId !== undefined ? { projectId: options.projectId } : {}),
+    });
+
+    console.log(`success: ${result.success ? "true" : "false"}`);
+    console.log(`agent-name: ${result.agentName}`);
   } catch (err) {
     console.error("error:", (err as Error).message);
     process.exit(1);

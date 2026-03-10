@@ -55,6 +55,13 @@ export class ChannelBridge {
     ].join("\n");
   }
 
+  private static getLeaderDirectChatBlockedText(agentName: string): string {
+    return [
+      `leader-direct-chat-disabled: '${agentName}' is a leader agent`,
+      "use-project-chat: send tasks to the project speaker instead",
+    ].join("\n");
+  }
+
   constructor(
     private router: MessageRouter,
     private db: HiBossDatabase,
@@ -113,9 +120,10 @@ export class ChannelBridge {
     }
 
     // Enrich command with agent name
-    const enrichedCommand: ChannelCommand & { agentName: string } = {
+    const enrichedCommand: ChannelCommand & { agentName: string; platform: string } = {
       ...command,
       agentName: binding.agentName,
+      platform: adapter.platform,
     };
 
     if (this.commandHandler) {
@@ -158,6 +166,28 @@ export class ChannelBridge {
       return;
     }
 
+    const boundAgent = this.db.getAgentByNameCaseInsensitive(binding.agentName);
+    if (fromBoss && boundAgent?.role === "leader") {
+      logEvent("warn", "channel-leader-direct-chat-blocked", {
+        "adapter-type": platform,
+        "chat-id": message.chat.id,
+        "agent-name": boundAgent.name,
+      });
+      try {
+        await adapter.sendMessage(message.chat.id, {
+          text: ChannelBridge.getLeaderDirectChatBlockedText(boundAgent.name),
+        });
+      } catch (err) {
+        logEvent("warn", "channel-send-failed", {
+          "message-kind": "message",
+          "adapter-type": platform,
+          "chat-id": message.chat.id,
+          error: errorMessage(err),
+        });
+      }
+      return;
+    }
+
     const confirmedText = stripDestructiveConfirmationPrefix(message.content.text);
     if (confirmedText !== undefined) {
       message = {
@@ -190,6 +220,19 @@ export class ChannelBridge {
 
     const fromAddress = formatChannelAddress(platform, message.chat.id);
     const toAddress = formatAgentAddress(binding.agentName);
+    const pinnedContextKey = `channel_project_context:${platform}:${message.chat.id}:${binding.agentName}`;
+    const pinnedProjectId = (this.db.getConfig(pinnedContextKey) ?? "").trim();
+    const pinnedProject = pinnedProjectId ? this.db.getProjectById(pinnedProjectId) : null;
+    const isPinnedProjectMember =
+      !!pinnedProject &&
+      (pinnedProject.speakerAgent === binding.agentName ||
+        this.db
+          .listProjectLeaders(pinnedProject.id, { activeOnly: false })
+          .some((leader) => leader.agentName === binding.agentName));
+    const project =
+      isPinnedProjectMember && pinnedProject
+        ? pinnedProject
+        : this.db.getProjectByMainGroupChannel(fromAddress);
 
     await this.router.routeEnvelope({
       from: fromAddress,
@@ -208,6 +251,7 @@ export class ChannelBridge {
         channelMessageId: message.id,
         author: message.author,
         chat: message.chat,
+        ...(project ? { projectId: project.id } : {}),
         ...(message.inReplyTo ? { inReplyTo: message.inReplyTo } : {}),
       },
     });

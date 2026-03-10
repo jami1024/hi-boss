@@ -59,6 +59,16 @@ Projects:
 - `project.get`
 - `project.select-leader`
 
+Skills:
+
+- `skill.remote.add`
+- `skill.remote.list`
+- `skill.remote.update`
+- `skill.remote.remove`
+
+`skill.remote.add` / `skill.remote.update` / `skill.remote.remove` results include a `refresh` summary (`count`, `requested[]`) that describes session refresh requests triggered by the mutation.
+When these methods fail validation/safety checks, error `data` may include `{ errorCode, hint }` for user-facing diagnostics.
+
 Cron:
 
 - `cron.create`
@@ -83,6 +93,11 @@ Agents:
 - `agent.self` (resolve `token` → current agent config)
 - `agent.session-policy.set`
 - `agent.status`
+
+`agent.refresh` params:
+- `token` (required)
+- `agentName` (required)
+- `projectId` (optional): when provided, refresh targets the project-scoped session key `<agentName>:<projectId>`; when omitted, daemon uses auto-project targeting (falls back to agent-scoped refresh when project context is unavailable)
 
 Daemon:
 

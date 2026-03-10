@@ -44,11 +44,16 @@ Default permission levels below come from the built-in permission policy (`DEFAU
 | `hiboss project list` | List project-scoped views | Yes (agent token) | restricted |
 | `hiboss project get` | Get one project view | Yes (agent token) | restricted |
 | `hiboss project select-leader` | Select best leader for project + capability set | Yes (agent token) | restricted |
+| `hiboss skill add-remote` | Download/install a remote skill for agent/project | Yes (boss token) | boss |
+| `hiboss skill list-remote` | List remote-managed skills for agent/project | Yes (boss token) | boss |
+| `hiboss skill update-remote` | Update a remote-managed skill | Yes (boss token) | boss |
+| `hiboss skill remove-remote` | Remove a remote-managed skill | Yes (boss token) | boss |
 | `hiboss reaction set` | Set a reaction on a channel message | Yes (agent token) | restricted |
 | `hiboss agent register` | Register a new agent | Yes (boss-privileged token) | boss |
 | `hiboss agent set` | Update agent settings and bindings | Yes (agent/boss token) | privileged |
 | `hiboss agent list` | List agents | Yes (agent/boss token) | restricted |
 | `hiboss agent status` | Show agent state/health | Yes (agent/boss token) | restricted |
+| `hiboss agent refresh` | Request session refresh (agent or project-scoped) | Yes (boss token) | boss |
 | `hiboss agent abort` | Cancel current run + clear pending inbox | Yes (boss token) | boss |
 | `hiboss agent delete` | Delete an agent | Yes (boss-privileged token) | boss |
 
@@ -64,5 +69,6 @@ Note: `hiboss daemon start` prints startup failure guidance directly in CLI when
 - Cron: `docs/spec/cli/cron.md`
 - Work items: `docs/spec/cli/work-items.md`
 - Projects: `docs/spec/cli/projects.md`
+- Skills: `docs/spec/cli/skills.md`
 - Reactions: `docs/spec/cli/reactions.md`
 - Agents: `docs/spec/cli/agents.md`

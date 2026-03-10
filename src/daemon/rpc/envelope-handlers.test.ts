@@ -4,11 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DEFAULT_PERMISSION_POLICY } from "../../shared/permissions.js";
-import { MessageRouter } from "../router/message-router.js";
+import { WEB_BOSS_ADDRESS } from "../../web/handlers/envelopes.js";
 import { HiBossDatabase } from "../db/database.js";
+import { MessageRouter } from "../router/message-router.js";
+import type { DaemonContext, Principal } from "./context.js";
 import { createEnvelopeHandlers } from "./envelope-handlers.js";
 import { normalizeWorkspacePath } from "./work-item-orchestration.js";
-import type { DaemonContext, Principal } from "./context.js";
 
 function withTempDb(run: (db: HiBossDatabase, tempDir: string) => Promise<void> | void): Promise<void> {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "hiboss-rpc-envelope-test-"));
@@ -58,6 +59,7 @@ function buildAgentContext(db: HiBossDatabase, tempDir: string): DaemonContext {
     createAdapterForBinding: async () => null,
     removeAdapter: async () => undefined,
     registerAgentHandler: () => undefined,
+    rpcHandlers: {},
   };
 }
 
@@ -407,6 +409,264 @@ test("envelope.send requires speaker to rebind project-scoped item when orchestr
         if (!(err instanceof Error)) return false;
         const code = (err as Error & { code?: number }).code;
         return code === -32001 && err.message.includes("orchestrator is not initialized");
+      }
+    );
+  });
+});
+
+test("envelope.send injects metadata.projectId from running run context", async () => {
+  await withTempDb(async (db, tempDir) => {
+    const { token: speakerToken } = db.registerAgent({
+      name: "nex",
+      provider: "codex",
+      role: "speaker",
+      workspace: path.join(tempDir, "speaker-home"),
+    });
+    db.registerAgent({
+      name: "kai",
+      provider: "codex",
+      role: "leader",
+      workspace: path.join(tempDir, "leader-home"),
+    });
+
+    const project = db.upsertProject({
+      id: "prj-propagate",
+      name: "demo",
+      root: path.join(tempDir, "repo"),
+      speakerAgent: "nex",
+    });
+    db.upsertProjectLeader({
+      projectId: project.id,
+      agentName: "kai",
+      active: true,
+    });
+
+    const upstream = db.createEnvelope({
+      from: WEB_BOSS_ADDRESS,
+      to: "agent:nex",
+      fromBoss: true,
+      content: { text: "project scoped chat" },
+      metadata: { source: "web", projectId: project.id },
+    });
+    db.markEnvelopesDone([upstream.id]);
+    db.createAgentRun("nex", [upstream.id]);
+
+    const handlers = createEnvelopeHandlers(buildAgentContext(db, tempDir));
+    const send = handlers["envelope.send"];
+    const result = (await send({
+      token: speakerToken,
+      to: "agent:kai",
+      text: "delegate",
+    })) as { id: string };
+
+    const created = db.getEnvelopeById(result.id);
+    assert.equal((created?.metadata as Record<string, unknown> | undefined)?.projectId, project.id);
+    const taskId = (created?.metadata as Record<string, unknown> | undefined)?.taskId;
+    assert.equal(typeof taskId, "string");
+    assert.ok(taskId);
+
+    const task = db.getProjectTaskById(String(taskId));
+    assert.ok(task);
+    assert.equal(task?.projectId, project.id);
+    assert.equal(task?.state, "dispatched");
+    assert.equal(task?.assignee, "kai");
+  });
+});
+
+test("envelope.send in project-scoped run rejects non-whitelisted leader and does not auto-upsert", async () => {
+  await withTempDb(async (db, tempDir) => {
+    const { token: speakerToken } = db.registerAgent({
+      name: "nex",
+      provider: "codex",
+      role: "speaker",
+      workspace: path.join(tempDir, "speaker-home"),
+    });
+    db.registerAgent({
+      name: "kai",
+      provider: "codex",
+      role: "leader",
+      workspace: path.join(tempDir, "leader-home"),
+    });
+    db.registerAgent({
+      name: "leo",
+      provider: "codex",
+      role: "leader",
+      workspace: path.join(tempDir, "leader-home"),
+    });
+
+    const project = db.upsertProject({
+      id: "prj-restrict",
+      name: "restricted",
+      root: path.join(tempDir, "repo"),
+      speakerAgent: "nex",
+    });
+    db.upsertProjectLeader({
+      projectId: project.id,
+      agentName: "kai",
+      active: true,
+    });
+
+    const upstream = db.createEnvelope({
+      from: WEB_BOSS_ADDRESS,
+      to: "agent:nex",
+      fromBoss: true,
+      content: { text: "project scoped chat" },
+      metadata: { source: "web", projectId: project.id },
+    });
+    db.markEnvelopesDone([upstream.id]);
+    db.createAgentRun("nex", [upstream.id]);
+
+    const handlers = createEnvelopeHandlers(buildAgentContext(db, tempDir));
+    const send = handlers["envelope.send"];
+
+    await assert.rejects(
+      () =>
+        send({
+          token: speakerToken,
+          to: "agent:leo",
+          text: "delegate to unauthorized leader",
+        }),
+      (err: unknown) => {
+        if (!(err instanceof Error)) return false;
+        const code = (err as Error & { code?: number }).code;
+        return code === -32001 && err.message.includes("not an active leader");
+      }
+    );
+
+    const projectLeaders = db.listProjectLeaders(project.id, { activeOnly: false });
+    assert.equal(projectLeaders.some((leader) => leader.agentName === "leo"), false);
+  });
+});
+
+test("envelope.send in project-scoped leader run enforces allowDispatchTo matrix", async () => {
+  await withTempDb(async (db, tempDir) => {
+    db.registerAgent({
+      name: "nex",
+      provider: "codex",
+      role: "speaker",
+      workspace: path.join(tempDir, "speaker-home"),
+    });
+    const { token: kaiToken } = db.registerAgent({
+      name: "kai",
+      provider: "codex",
+      role: "leader",
+      workspace: path.join(tempDir, "leader-home"),
+    });
+    db.registerAgent({
+      name: "leo",
+      provider: "codex",
+      role: "leader",
+      workspace: path.join(tempDir, "leader-home"),
+    });
+
+    const project = db.upsertProject({
+      id: "prj-dispatch-matrix",
+      name: "dispatch-matrix",
+      root: path.join(tempDir, "repo"),
+      speakerAgent: "nex",
+    });
+    db.upsertProjectLeader({
+      projectId: project.id,
+      agentName: "kai",
+      allowDispatchTo: ["nex"],
+      active: true,
+    });
+    db.upsertProjectLeader({
+      projectId: project.id,
+      agentName: "leo",
+      active: true,
+    });
+
+    const upstream = db.createEnvelope({
+      from: "agent:nex",
+      to: "agent:kai",
+      content: { text: "delegate" },
+      metadata: { source: "web", projectId: project.id },
+    });
+    db.markEnvelopesDone([upstream.id]);
+    db.createAgentRun("kai", [upstream.id]);
+
+    const handlers = createEnvelopeHandlers(buildAgentContext(db, tempDir));
+    const send = handlers["envelope.send"];
+
+    await assert.rejects(
+      () =>
+        send({
+          token: kaiToken,
+          to: "agent:leo",
+          text: "cross-leader dispatch",
+        }),
+      (err: unknown) => {
+        if (!(err instanceof Error)) return false;
+        const code = (err as Error & { code?: number }).code;
+        return code === -32001 && err.message.includes("cannot dispatch");
+      }
+    );
+  });
+});
+
+test("envelope.send in project-scoped leader run requires taskId for leader-to-leader dispatch", async () => {
+  await withTempDb(async (db, tempDir) => {
+    db.registerAgent({
+      name: "nex",
+      provider: "codex",
+      role: "speaker",
+      workspace: path.join(tempDir, "speaker-home"),
+    });
+    const { token: kaiToken } = db.registerAgent({
+      name: "kai",
+      provider: "codex",
+      role: "leader",
+      workspace: path.join(tempDir, "leader-home"),
+    });
+    db.registerAgent({
+      name: "leo",
+      provider: "codex",
+      role: "leader",
+      workspace: path.join(tempDir, "leader-home"),
+    });
+
+    const project = db.upsertProject({
+      id: "prj-task-required",
+      name: "task-required",
+      root: path.join(tempDir, "repo"),
+      speakerAgent: "nex",
+    });
+    db.upsertProjectLeader({
+      projectId: project.id,
+      agentName: "kai",
+      allowDispatchTo: ["leo", "nex"],
+      active: true,
+    });
+    db.upsertProjectLeader({
+      projectId: project.id,
+      agentName: "leo",
+      active: true,
+    });
+
+    const upstream = db.createEnvelope({
+      from: "agent:nex",
+      to: "agent:kai",
+      content: { text: "delegate" },
+      metadata: { source: "web", projectId: project.id },
+    });
+    db.markEnvelopesDone([upstream.id]);
+    db.createAgentRun("kai", [upstream.id]);
+
+    const handlers = createEnvelopeHandlers(buildAgentContext(db, tempDir));
+    const send = handlers["envelope.send"];
+
+    await assert.rejects(
+      () =>
+        send({
+          token: kaiToken,
+          to: "agent:leo",
+          text: "cross-leader dispatch without task",
+        }),
+      (err: unknown) => {
+        if (!(err instanceof Error)) return false;
+        const code = (err as Error & { code?: number }).code;
+        return code === -32001 && err.message.includes("without task context");
       }
     );
   });

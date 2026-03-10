@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS project_leaders (
   project_id TEXT NOT NULL,
   agent_name TEXT NOT NULL,
   capabilities_json TEXT,
+  allow_dispatch_to TEXT,
   active INTEGER NOT NULL DEFAULT 1,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (project_id, agent_name),
@@ -164,9 +165,36 @@ CREATE TABLE IF NOT EXISTS project_leaders (
   FOREIGN KEY (agent_name) REFERENCES agents(name) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS project_tasks (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'created',
+  priority TEXT NOT NULL DEFAULT 'normal',
+  assignee TEXT,
+  output TEXT,
+  flow_log TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  completed_at INTEGER,
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS task_progress (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  agent_name TEXT NOT NULL,
+  content TEXT NOT NULL,
+  todos TEXT,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (task_id) REFERENCES project_tasks(id) ON DELETE CASCADE,
+  FOREIGN KEY (agent_name) REFERENCES agents(name) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_envelopes_to ON envelopes("to", status);
 CREATE INDEX IF NOT EXISTS idx_envelopes_from ON envelopes("from", created_at);
 CREATE INDEX IF NOT EXISTS idx_envelopes_status_deliver_at ON envelopes(status, deliver_at);
+CREATE INDEX IF NOT EXISTS idx_envelopes_project_id ON envelopes(json_extract(metadata, '$.projectId'), created_at);
 CREATE INDEX IF NOT EXISTS idx_cron_schedules_agent ON cron_schedules(agent_name, enabled);
 CREATE INDEX IF NOT EXISTS idx_cron_schedules_pending_envelope ON cron_schedules(pending_envelope_id);
 CREATE INDEX IF NOT EXISTS idx_agents_token ON agents(token);
@@ -185,4 +213,7 @@ CREATE INDEX IF NOT EXISTS idx_projects_root ON projects(root);
 CREATE INDEX IF NOT EXISTS idx_projects_speaker ON projects(speaker_agent, updated_at);
 CREATE INDEX IF NOT EXISTS idx_project_leaders_project_active ON project_leaders(project_id, active, updated_at);
 CREATE INDEX IF NOT EXISTS idx_project_leaders_agent ON project_leaders(agent_name, updated_at);
+CREATE INDEX IF NOT EXISTS idx_project_tasks_project_updated ON project_tasks(project_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_project_tasks_state_updated ON project_tasks(state, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_task_progress_task_created ON task_progress(task_id, created_at DESC);
 `;
