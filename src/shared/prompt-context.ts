@@ -342,6 +342,7 @@ export function buildTurnPromptContext(params: {
   datetimeMs: number;
   bossTimezone: string;
   envelopes: Envelope[];
+  recalledMemory?: string;
 }): Record<string, unknown> {
   const bossTimeZone = params.bossTimezone.trim() || getDaemonIanaTimeZone();
   const envelopes = (params.envelopes ?? []).map((env, idx) => {
@@ -434,6 +435,7 @@ export function buildTurnPromptContext(params: {
       agentName: params.agentName,
       envelopeCount: envelopes.length,
       envelopeBlockCount,
+      recalledMemory: params.recalledMemory ?? "",
     },
     envelopes,
   };

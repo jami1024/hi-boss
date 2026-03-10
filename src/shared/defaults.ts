@@ -26,6 +26,10 @@ export const DEFAULT_MEMORY_LONGTERM_MAX_CHARS = 12_000 as const;
 export const DEFAULT_MEMORY_SHORTTERM_PER_DAY_MAX_CHARS = 4_000 as const;
 export const DEFAULT_MEMORY_SHORTTERM_DAYS = 2 as const;
 
+// Turn-level memory recall: broader search window and separate budget.
+export const DEFAULT_MEMORY_RECALL_MAX_CHARS = 2_000 as const;
+export const DEFAULT_MEMORY_RECALL_SEARCH_DAYS = 14 as const;
+
 // ==================== Agent Defaults ====================
 
 export const DEFAULT_AGENT_PROVIDER = "claude" as const;
