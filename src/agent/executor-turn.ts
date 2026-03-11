@@ -62,10 +62,22 @@ function buildClaudeArgs(
     "--permission-mode", getClaudePermissionMode(executionMode),
   ];
 
+  // In sandbox mode, allow `hiboss` CLI commands so the agent can still
+  // send envelopes / reactions even when other Bash commands are denied.
+  if (executionMode === "workspace-sandbox") {
+    args.push("--allowedTools", "Bash(hiboss:*)");
+  }
+
   const internalSpaceDir = getAgentInternalSpaceDir(agentName, hibossDir);
   const daemonDir = path.join(hibossDir, ".daemon");
   args.push("--add-dir", internalSpaceDir);
   args.push("--add-dir", daemonDir);
+
+  // Skill inject: stable system instructions are loaded from this directory
+  // as a CLAUDE.md file, reducing the inline --append-system-prompt size.
+  if (session.skillInjectDir) {
+    args.push("--add-dir", session.skillInjectDir);
+  }
 
   if (session.model) {
     args.push("--model", session.model);

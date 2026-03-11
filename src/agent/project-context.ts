@@ -221,9 +221,19 @@ function buildProjectAdditionalContext(params: {
   return sections.join("\n");
 }
 
+function readEnvelopeConversationId(envelope: Envelope): string | undefined {
+  const metadata = envelope.metadata;
+  if (!metadata || typeof metadata !== "object") return undefined;
+  const conversationId = (metadata as Record<string, unknown>).conversationId;
+  if (typeof conversationId !== "string") return undefined;
+  const normalized = conversationId.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 export interface AgentRunProjectScope {
   sessionKey: string;
   isProjectScoped: boolean;
+  conversationId?: string;
   project?: Project;
   projectId?: string;
   taskId?: string;
@@ -238,6 +248,7 @@ export function resolveAgentRunProjectScope(params: {
 }): AgentRunProjectScope {
   let projectId: string | undefined;
   let taskId: string | undefined;
+  let conversationId: string | undefined;
   for (const envelope of params.envelopes) {
     const envelopeProjectId = readEnvelopeProjectId(envelope);
     if (!envelopeProjectId) continue;
@@ -262,10 +273,24 @@ export function resolveAgentRunProjectScope(params: {
     }
   }
 
+  // Extract conversationId from envelopes (first non-empty wins).
+  for (const envelope of params.envelopes) {
+    const id = readEnvelopeConversationId(envelope);
+    if (id) {
+      conversationId = id;
+      break;
+    }
+  }
+
   if (!projectId) {
+    // Conversation-scoped session key takes priority over bare agent name.
+    const sessionKey = conversationId
+      ? `${params.agentName}:conv:${conversationId}`
+      : params.agentName;
     return {
-      sessionKey: params.agentName,
+      sessionKey,
       isProjectScoped: false,
+      ...(conversationId ? { conversationId } : {}),
       ...(taskId ? { taskId } : {}),
     };
   }
@@ -292,9 +317,15 @@ export function resolveAgentRunProjectScope(params: {
   const skillSummary = readProjectSkillSummary(project.root);
   const memorySummary = readProjectMemorySummary(project.root);
 
+  // Conversation-scoped session key takes priority over bare project key.
+  const projectSessionKey = conversationId
+    ? `${params.agentName}:conv:${conversationId}`
+    : `${params.agentName}:${project.id}`;
+
   return {
-    sessionKey: `${params.agentName}:${project.id}`,
+    sessionKey: projectSessionKey,
     isProjectScoped: true,
+    ...(conversationId ? { conversationId } : {}),
     project,
     projectId: project.id,
     ...(taskId ? { taskId } : {}),

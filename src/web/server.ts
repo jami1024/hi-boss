@@ -21,6 +21,7 @@ import { createProjectHandlers } from "./handlers/projects.js";
 import { createPromptHandlers } from "./handlers/prompts.js";
 import { createConfigHandlers } from "./handlers/config.js";
 import { createEnvelopeBrowseHandlers } from "./handlers/envelope-browse.js";
+import { createConversationHandlers } from "./handlers/conversations.js";
 import { ChatWebSocket } from "./ws/chat.js";
 import type { DaemonContext } from "../daemon/rpc/context.js";
 import { logEvent } from "../shared/daemon-log.js";
@@ -144,6 +145,17 @@ export class WebServer {
     const envelopeBrowseHandlers = createEnvelopeBrowseHandlers(this.daemon);
     this.router.get(`${api}/envelopes`, envelopeBrowseHandlers.listEnvelopes);
     this.router.get(`${api}/envelopes/:id`, envelopeBrowseHandlers.getEnvelope);
+
+    // Conversations
+    const conversationHandlers = createConversationHandlers(this.daemon);
+    this.router.post(`${api}/conversations`, conversationHandlers.createConversation);
+    this.router.get(`${api}/conversations`, conversationHandlers.listConversations);
+    this.router.get(`${api}/conversations/:id`, conversationHandlers.getConversation);
+    this.router.get(`${api}/conversations/:id/messages`, conversationHandlers.listMessages);
+    this.router.post(`${api}/conversations/:id/send`, conversationHandlers.sendMessage);
+    this.router.put(`${api}/conversations/:id`, conversationHandlers.updateConversation);
+    this.router.delete(`${api}/conversations/:id`, conversationHandlers.deleteConversation);
+    this.router.post(`${api}/conversations/:id/grant-access`, conversationHandlers.grantAccess);
   }
 
   async start(): Promise<void> {

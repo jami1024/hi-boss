@@ -191,6 +191,20 @@ CREATE TABLE IF NOT EXISTS task_progress (
   FOREIGN KEY (agent_name) REFERENCES agents(name) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS conversations (
+  id TEXT PRIMARY KEY,
+  agent_name TEXT NOT NULL,
+  project_id TEXT,
+  title TEXT,
+  provider TEXT,
+  session_id TEXT,
+  session_metadata TEXT,
+  permission_override TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (agent_name) REFERENCES agents(name) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_envelopes_to ON envelopes("to", status);
 CREATE INDEX IF NOT EXISTS idx_envelopes_from ON envelopes("from", created_at);
 CREATE INDEX IF NOT EXISTS idx_envelopes_status_deliver_at ON envelopes(status, deliver_at);
@@ -216,4 +230,7 @@ CREATE INDEX IF NOT EXISTS idx_project_leaders_agent ON project_leaders(agent_na
 CREATE INDEX IF NOT EXISTS idx_project_tasks_project_updated ON project_tasks(project_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_project_tasks_state_updated ON project_tasks(state, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_task_progress_task_created ON task_progress(task_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_agent_updated ON conversations(agent_name, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversations_project_updated ON conversations(project_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_envelopes_conversation_id ON envelopes(json_extract(metadata, '$.conversationId'), created_at);
 `;

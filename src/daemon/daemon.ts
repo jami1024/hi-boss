@@ -118,6 +118,7 @@ export class Daemon {
   private defaultPermissionPolicy: PermissionPolicyV1 = DEFAULT_PERMISSION_POLICY;
   private webServer: WebServer | null = null;
   private rpcMethods: RpcMethodRegistry = {};
+  private conversationCleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private config: DaemonConfig = getDefaultConfig()) {
     const dbPath = path.join(config.daemonDir, "hiboss.db");
@@ -309,6 +310,18 @@ export class Daemon {
       const webConfig = this.config.web ?? { port: DEFAULT_WEB_PORT, enabled: true };
       this.webServer = new WebServer(webConfig, this.createContext());
       await this.webServer.start();
+
+      // Periodic conversation cleanup (every 6 hours, retain 30 days).
+      this.conversationCleanupTimer = setInterval(() => {
+        try {
+          const deleted = this.db.deleteExpiredConversations(30 * 24 * 60 * 60 * 1000);
+          if (deleted > 0) {
+            logEvent("info", "conversation-cleanup", { deleted });
+          }
+        } catch (err) {
+          logEvent("warn", "conversation-cleanup-failed", { error: errorMessage(err) });
+        }
+      }, 6 * 60 * 60 * 1000);
     } catch (err) {
       // Best-effort cleanup to avoid leaving stale pid/socket files.
       await this.stop().catch(() => {});
@@ -461,6 +474,12 @@ export class Daemon {
 
     // Stop scheduler first (prevents new work while shutting down)
     this.scheduler.stop();
+
+    // Stop conversation cleanup timer
+    if (this.conversationCleanupTimer) {
+      clearInterval(this.conversationCleanupTimer);
+      this.conversationCleanupTimer = null;
+    }
 
     // Stop web server
     if (this.webServer) {

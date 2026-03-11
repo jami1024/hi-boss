@@ -50,6 +50,7 @@ function AppLayout() {
             <Route path="/projects" element={<ProjectsPage />} />
             <Route path="/projects/:id" element={<ProjectDetailPage />} />
             <Route path="/projects/:id/chat" element={<ProjectChatPage />} />
+            <Route path="/projects/:id/chat/:conversationId" element={<ProjectChatPage />} />
             <Route path="/projects/:id/memory" element={<ProjectMemoryPage />} />
             <Route path="/projects/:id/tasks" element={<ProjectTasksPage />} />
             <Route path="/projects/:id/tasks/:taskId" element={<ProjectTaskDetailPage />} />

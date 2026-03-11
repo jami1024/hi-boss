@@ -2,7 +2,7 @@
  * Agent executor for running agent sessions with direct CLI invocation.
  */
 import type { ChildProcess } from "node:child_process";
-import { formatAgentAddress } from "../adapters/types.js";
+import { formatAgentAddress, parseAddress } from "../adapters/types.js";
 import type { HiBossDatabase } from "../daemon/db/database.js";
 import type { CreateEnvelopeInput, Envelope } from "../envelope/types.js";
 import { parseAgentRoleFromMetadata } from "../shared/agent-role.js";
@@ -69,6 +69,7 @@ export function buildRunFailureNotificationEnvelopes(params: {
   runId: string;
   triggeringEnvelopes: Envelope[];
   error: string;
+  executionMode?: "full-access" | "workspace-sandbox";
 }): CreateEnvelopeInput[] {
   const senderAddress = formatAgentAddress(params.agentName);
   const normalizedError = normalizeRunErrorForNotification(params.error);
@@ -89,6 +90,13 @@ export function buildRunFailureNotificationEnvelopes(params: {
     if (projectId) metadata.projectId = projectId;
     const taskId = readTaskIdFromEnvelopeMetadata(sourceMetadata);
     if (taskId) metadata.taskId = taskId;
+
+    // When the run failed in sandbox mode, mark the failure as escalatable
+    // so the Web UI can offer a "grant full access & retry" button.
+    if (params.executionMode === "workspace-sandbox") {
+      metadata.permissionEscalatable = true;
+      metadata.executionMode = params.executionMode;
+    }
 
     notices.push({
       from: senderAddress,
@@ -177,6 +185,7 @@ export class AgentExecutor {
     runId: string;
     triggeringEnvelopes: Envelope[];
     error: string;
+    executionMode?: "full-access" | "workspace-sandbox";
   }): Promise<void> {
     if (!this.router) return;
 
@@ -433,6 +442,10 @@ export class AgentExecutor {
     const run = db.createAgentRun(agent.name, envelopeIds);
     const triggerFields = getTriggerFields(trigger);
     let runStartedAtMs: number | null = null;
+    let effectivePolicy: { mode: "full-access" | "workspace-sandbox"; reason: string } = {
+      mode: "workspace-sandbox",
+      reason: "default-safe-mode",
+    };
 
     const inFlight: InFlightAgentRun = {
       runRecordId: run.id,
@@ -475,6 +488,18 @@ export class AgentExecutor {
         envelopes,
       });
 
+      // Check conversation-level permission override (Web UI "grant full access").
+      effectivePolicy = executionPolicy;
+      if (effectivePolicy.mode === "workspace-sandbox" && runProjectScope.conversationId) {
+        const conversation = db.getConversationById(runProjectScope.conversationId);
+        if (conversation?.permissionOverride === "full-access") {
+          effectivePolicy = {
+            mode: "full-access",
+            reason: "conversation-permission-override",
+          };
+        }
+      }
+
       logEvent("info", "agent-run-start", {
         "agent-name": agent.name,
         "agent-run-id": run.id,
@@ -482,8 +507,8 @@ export class AgentExecutor {
         "project-id": runProjectScope.projectId,
         "envelopes-read-count": envelopeIds.length,
         "pending-remaining-count": pendingRemainingCount,
-        "execution-mode": executionPolicy.mode,
-        "execution-mode-reason": executionPolicy.reason,
+        "execution-mode": effectivePolicy.mode,
+        "execution-mode-reason": effectivePolicy.reason,
         ...triggerFields,
       });
       runStartedAtMs = Date.now();
@@ -492,7 +517,7 @@ export class AgentExecutor {
       const turn = await executeCliTurn(session, turnInput, {
         hibossDir: this.hibossDir,
         agentName: agent.name,
-        executionMode: executionPolicy.mode,
+        executionMode: effectivePolicy.mode,
         signal: inFlight.abortController.signal,
         onChildProcess: (proc) => {
           inFlight.childProcess = proc;
@@ -541,6 +566,26 @@ export class AgentExecutor {
         } catch (err) {
           logEvent("warn", "agent-session-snapshot-failed", {
             "agent-name": agent.name,
+            error: errorMessage(err),
+          });
+        }
+      }
+
+      // Persist session to conversation record for conversation-scoped runs.
+      if (session.sessionId && runProjectScope.conversationId) {
+        try {
+          db.updateConversationSession(runProjectScope.conversationId, {
+            provider: session.provider,
+            sessionId: session.sessionId,
+            ...(session.provider === "codex" && session.codexCumulativeUsageTotals
+              ? { sessionMetadata: { codexCumulativeUsage: session.codexCumulativeUsageTotals } }
+              : {}),
+          });
+          db.updateConversationActivity(runProjectScope.conversationId);
+        } catch (err) {
+          logEvent("warn", "conversation-session-persist-failed", {
+            "agent-name": agent.name,
+            "conversation-id": runProjectScope.conversationId,
             error: errorMessage(err),
           });
         }
@@ -606,6 +651,7 @@ export class AgentExecutor {
         runId: run.id,
         triggeringEnvelopes: envelopes,
         error: errMsg,
+        executionMode: effectivePolicy.mode,
       });
       logEvent("info", "agent-run-complete", {
         "agent-name": agent.name,
@@ -642,6 +688,7 @@ export class AgentExecutor {
       workspaceOverride: runProjectScope.workspaceOverride,
       additionalContext: runProjectScope.additionalContext,
       persistSessionHandle: !runProjectScope.isProjectScoped,
+      conversationId: runProjectScope.conversationId,
       applyPendingSessionRefresh: (name) => this.applyPendingSessionRefresh(name),
       refreshSession: (name, reason) => this.refreshSession(name, reason),
       getSessionPolicy: (a) => this.getSessionPolicy(a),

@@ -7,7 +7,7 @@
 
 import type { Agent } from "./types.js";
 import type { HiBossDatabase } from "../daemon/db/database.js";
-import { generateSystemInstructions } from "./instruction-generator.js";
+import { generateSystemInstructions, generateSplitSystemInstructions } from "./instruction-generator.js";
 import {
   DEFAULT_AGENT_PROVIDER,
   getDefaultRuntimeWorkspace,
@@ -22,6 +22,7 @@ import { readPersistedAgentSession } from "./persisted-session.js";
 import type { AgentRunTrigger } from "./executor-triggers.js";
 import { getTriggerFields } from "./executor-triggers.js";
 import { resolveSessionOpenMode } from "./session-resume.js";
+import { writeAgentSkillFile } from "./skill-inject.js";
 
 type SessionPolicy = {
   dailyResetAt?: { hour: number; minute: number; normalized: string };
@@ -62,6 +63,7 @@ export async function getOrCreateAgentSession(params: {
   workspaceOverride?: string;
   additionalContext?: string;
   persistSessionHandle?: boolean;
+  conversationId?: string;
   applyPendingSessionRefresh: (sessionTarget: string) => Promise<string[]>;
   refreshSession: (sessionKeyOrAgentName: string, reason?: string) => Promise<void>;
   getSessionPolicy: (agent: Agent) => SessionPolicy;
@@ -94,43 +96,91 @@ export async function getOrCreateAgentSession(params: {
 
     const desiredProvider = params.agent.provider ?? DEFAULT_AGENT_PROVIDER;
     const shouldUsePersistedSessionHandle = params.persistSessionHandle ?? true;
-    const persisted = shouldUsePersistedSessionHandle ? readPersistedAgentSession(agentRecord) : null;
+
+    // Conversation-scoped runs load session from the conversations table.
+    // Only use the conversation session if it belongs to THIS agent.
+    const rawConversation = params.conversationId
+      ? params.db.getConversationById(params.conversationId)
+      : null;
+    const conversationRecord =
+      rawConversation && rawConversation.agentName === params.agent.name
+        ? rawConversation
+        : null;
+
+    const persisted = conversationRecord
+      ? null  // Skip agent-level persisted session for conversation-scoped runs.
+      : shouldUsePersistedSessionHandle
+        ? readPersistedAgentSession(agentRecord)
+        : null;
+
+    // If a conversation has a stored session, prefer its provider.
+    const conversationProvider = conversationRecord?.sessionId && conversationRecord.provider
+      ? (conversationRecord.provider as "claude" | "codex")
+      : null;
+
     // If a resumable session handle exists, prefer its provider.
     const provider =
-      persisted?.handle.sessionId && (persisted.provider === "claude" || persisted.provider === "codex")
-        ? persisted.provider
-        : desiredProvider;
+      conversationProvider
+        ?? (persisted?.handle.sessionId && (persisted.provider === "claude" || persisted.provider === "codex")
+          ? persisted.provider
+          : desiredProvider);
     const workspace = params.workspaceOverride ?? params.agent.workspace ?? getDefaultRuntimeWorkspace();
+
+    // For conversation-scoped runs, load codex cumulative usage from conversation metadata.
     const codexCumulativeUsageTotals =
       provider === "codex"
-        ? parseCodexCumulativeUsageTotals(persisted?.handle.metadata?.codexCumulativeUsage)
+        ? parseCodexCumulativeUsageTotals(
+            conversationRecord?.sessionMetadata?.codexCumulativeUsage
+              ?? persisted?.handle.metadata?.codexCumulativeUsage
+          )
         : undefined;
 
     try {
       const bindings = params.db.getBindingsByAgentName(params.agent.name);
       const boss = getBossInfo(params.db, bindings);
 
-      const { sessionId, createdAtMs, lastRunCompletedAtMs, openMode, openReason } =
-        shouldUsePersistedSessionHandle
-          ? resolveSessionOpenMode({
-            agent: params.agent,
-            agentRecord,
-            provider,
-            db: params.db,
-            policy: params.getSessionPolicy(params.agent),
-          })
-          : {
-            sessionId: undefined,
-            createdAtMs: Date.now(),
-            lastRunCompletedAtMs: undefined,
-            openMode: "open" as const,
-            openReason: "project-scoped-open",
-          };
+      let sessionId: string | undefined;
+      let createdAtMs: number;
+      let lastRunCompletedAtMs: number | undefined;
+      let openMode: "open" | "resume";
+      let openReason: string;
 
-      session = {
-        provider,
-        agentToken: agentRecord.token,
-        systemInstructions: generateSystemInstructions({
+      if (conversationRecord?.sessionId) {
+        // Resume from conversation-stored session.
+        sessionId = conversationRecord.sessionId;
+        createdAtMs = conversationRecord.createdAt;
+        lastRunCompletedAtMs = conversationRecord.updatedAt;
+        openMode = "resume";
+        openReason = "conversation-resume";
+      } else if (conversationRecord) {
+        // New conversation, no session yet.
+        sessionId = undefined;
+        createdAtMs = Date.now();
+        lastRunCompletedAtMs = undefined;
+        openMode = "open";
+        openReason = "conversation-open";
+      } else if (shouldUsePersistedSessionHandle) {
+        const resolved = resolveSessionOpenMode({
+          agent: params.agent,
+          agentRecord,
+          provider,
+          db: params.db,
+          policy: params.getSessionPolicy(params.agent),
+        });
+        sessionId = resolved.sessionId;
+        createdAtMs = resolved.createdAtMs;
+        lastRunCompletedAtMs = resolved.lastRunCompletedAtMs;
+        openMode = resolved.openMode;
+        openReason = resolved.openReason;
+      } else {
+        sessionId = undefined;
+        createdAtMs = Date.now();
+        lastRunCompletedAtMs = undefined;
+        openMode = "open";
+        openReason = "project-scoped-open";
+      }
+
+      const instructionCtx = {
           agent: params.agent,
           agentToken: agentRecord.token,
           bindings,
@@ -139,12 +189,36 @@ export async function getOrCreateAgentSession(params: {
           hibossDir: params.hibossDir,
           boss,
           additionalContext: params.additionalContext ?? "",
-        }),
+        };
+
+      // For Claude: split instructions into stable (skill file) + dynamic (inline).
+      // For Codex: use the full instructions inline (Codex has no CLAUDE.md loading).
+      let systemInstructions: string;
+      let skillInjectDir: string | undefined;
+
+      if (provider === "claude") {
+        const split = generateSplitSystemInstructions(instructionCtx);
+        const { dirPath } = writeAgentSkillFile({
+          hibossDir: params.hibossDir,
+          agentName: params.agent.name,
+          content: split.stableContent,
+        });
+        systemInstructions = split.dynamicContent;
+        skillInjectDir = dirPath;
+      } else {
+        systemInstructions = generateSystemInstructions(instructionCtx);
+      }
+
+      session = {
+        provider,
+        agentToken: agentRecord.token,
+        systemInstructions,
         workspace,
         model: params.agent.model,
         reasoningEffort: params.agent.reasoningEffort,
         sessionId,
         createdAtMs,
+        ...(skillInjectDir ? { skillInjectDir } : {}),
         ...(codexCumulativeUsageTotals ? { codexCumulativeUsageTotals } : {}),
         ...(lastRunCompletedAtMs !== undefined ? { lastRunCompletedAtMs } : {}),
       };

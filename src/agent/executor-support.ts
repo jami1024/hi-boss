@@ -13,6 +13,8 @@ export interface AgentSession {
   childProcess?: ChildProcess;
   /** Session ID for resume: session_id (Claude) or thread_id (Codex). */
   sessionId?: string;
+  /** Path to the skill inject directory (for --add-dir). Claude only. */
+  skillInjectDir?: string;
   createdAtMs: number;
   lastRunCompletedAtMs?: number;
   /**
