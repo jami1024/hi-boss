@@ -24,6 +24,7 @@ import type { Envelope } from "../../envelope/types.js";
 import { logEvent } from "../../shared/daemon-log.js";
 import { validateDirectChatTarget } from "../direct-chat-policy.js";
 import { WEB_BOSS_ADDRESS } from "../handlers/envelopes.js";
+import { computeAgentHealth } from "../../shared/agent-health.js";
 
 interface WsClient {
   ws: WebSocket;
@@ -56,7 +57,7 @@ function readClientMessageIdFromMetadata(metadata: Record<string, unknown> | und
 
 export interface AgentWsStatusPayload {
   agentState: "running" | "idle";
-  agentHealth: "ok" | "error" | "unknown";
+  agentHealth: "ok" | "degraded" | "error" | "unknown";
   pendingCount: number;
   currentRun?: {
     id: string;
@@ -102,7 +103,8 @@ export function buildAgentWsStatus(params: {
 
   const isBusy = params.daemon.executor.isAgentBusy(agent.name);
   const pendingCount = params.daemon.db.countDuePendingEnvelopesForAgent(agent.name);
-  const lastRun = params.daemon.db.getLastFinishedAgentRun(agent.name);
+  const recentRuns = params.daemon.db.getRecentFinishedAgentRuns(agent.name, 5);
+  const healthResetAt = typeof agent.metadata?.healthResetAt === "number" ? agent.metadata.healthResetAt : undefined;
   const currentRun = isBusy ? params.daemon.db.getCurrentRunningAgentRun(agent.name) : null;
   const sessionTarget = currentRun
     ? resolveSessionRefreshTargetForAgent({ db: params.daemon.db, agentName: agent.name })
@@ -113,7 +115,7 @@ export function buildAgentWsStatus(params: {
 
   return {
     agentState: isBusy ? "running" : "idle",
-    agentHealth: !lastRun ? "unknown" : lastRun.status === "failed" ? "error" : "ok",
+    agentHealth: computeAgentHealth(recentRuns, healthResetAt),
     pendingCount,
     ...(currentRun
       ? {

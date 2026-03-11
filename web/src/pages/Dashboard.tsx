@@ -18,8 +18,9 @@ function formatUptime(ms: number | null): string {
 function healthColor(health: string): string {
   switch (health) {
     case "ok": return "bg-green-500";
+    case "degraded": return "bg-yellow-500";
     case "error": return "bg-red-500";
-    default: return "bg-yellow-500";
+    default: return "bg-gray-400";
   }
 }
 

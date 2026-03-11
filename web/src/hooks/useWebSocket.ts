@@ -18,7 +18,7 @@ export interface ChatMessage {
 
 export interface AgentWsStatus {
   agentState: "running" | "idle";
-  agentHealth: "ok" | "error" | "unknown";
+  agentHealth: "ok" | "degraded" | "error" | "unknown";
   pendingCount: number;
   currentRun?: {
     id: string;

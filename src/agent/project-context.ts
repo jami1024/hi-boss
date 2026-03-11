@@ -3,6 +3,8 @@ import * as path from "node:path";
 import type { HiBossDatabase } from "../daemon/db/database.js";
 import type { Envelope } from "../envelope/types.js";
 import type { Project } from "../shared/project.js";
+import { readAgentSkillSummary } from "./instruction-generator.js";
+import { getHiBossDir } from "./home-setup.js";
 
 const MAX_PROJECT_INSTRUCTION_CHARS = 12_000;
 const MAX_PROJECT_SCRIPT_LINES = 30;
@@ -132,6 +134,7 @@ function readProjectMemorySummary(projectRoot: string): string[] {
 function buildProjectAdditionalContext(params: {
   project: Project;
   activeLeaders: string[];
+  teamCapabilities: { agentName: string; description?: string; skills: string[] }[];
   instructionFile?: string;
   scriptSummary: string[];
   skillSummary: string[];
@@ -151,6 +154,25 @@ function buildProjectAdditionalContext(params: {
     "- Keep all file operations within project-root.",
     "- Do not change directory outside project-root.",
   ];
+
+  if (params.teamCapabilities.length > 0) {
+    sections.push(
+      "",
+      "## team-capabilities",
+      "Available leader agents and their installed skills:",
+    );
+    for (const tc of params.teamCapabilities) {
+      sections.push(`### ${tc.agentName}`);
+      if (tc.description) {
+        sections.push(`description: ${tc.description}`);
+      }
+      if (tc.skills.length > 0) {
+        sections.push("skills:", ...tc.skills);
+      } else {
+        sections.push("skills: (none)");
+      }
+    }
+  }
 
   if (params.taskId) {
     sections.push(
@@ -256,6 +278,15 @@ export function resolveAgentRunProjectScope(params: {
   const activeLeaders = params.db
     .listProjectLeaders(project.id, { activeOnly: true })
     .map((leader) => leader.agentName);
+  const hibossDir = getHiBossDir();
+  const teamCapabilities = activeLeaders.map((leaderName) => {
+    const leaderAgent = params.db.getAgentByNameCaseInsensitive(leaderName);
+    return {
+      agentName: leaderName,
+      description: leaderAgent?.description ?? undefined,
+      skills: readAgentSkillSummary({ hibossDir, agentName: leaderName }),
+    };
+  });
   const instructionFile = readProjectInstructionFile(project.root);
   const scriptSummary = readProjectScriptSummary(project.root);
   const skillSummary = readProjectSkillSummary(project.root);
@@ -271,6 +302,7 @@ export function resolveAgentRunProjectScope(params: {
     additionalContext: buildProjectAdditionalContext({
       project,
       activeLeaders,
+      teamCapabilities,
       instructionFile,
       scriptSummary,
       skillSummary,

@@ -23,5 +23,5 @@ export interface ProjectLeaderCandidate {
   capabilities: string[];
   active: boolean;
   busy: boolean;
-  agentHealth: "ok" | "error" | "unknown";
+  agentHealth: "ok" | "degraded" | "error" | "unknown";
 }

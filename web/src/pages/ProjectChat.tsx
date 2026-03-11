@@ -1,53 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, type ProjectChatContext, type ProjectChatMessage } from "@/api/client";
+import { MessageBubble, type ChatMessageData } from "@/components/chat/MessageBubble";
+import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { useWebSocket } from "@/hooks/useWebSocket";
-import { cn } from "@/lib/utils";
-
-function formatTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function MessageBubble({ msg }: { msg: ProjectChatMessage }) {
-  const isBoss = msg.fromBoss || msg.from === "channel:web:boss";
-  const pendingHint =
-    msg.status !== "pending"
-      ? null
-      : isBoss
-        ? "排队中..."
-        : "处理中...";
-  return (
-    <div className={cn("flex", isBoss ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "max-w-[75%] rounded-2xl px-4 py-2.5 text-sm shadow-sm",
-          isBoss
-            ? "bg-gradient-to-br from-primary to-primary/85 text-primary-foreground"
-            : "border border-border/70 bg-card text-foreground"
-        )}
-      >
-        <p className="whitespace-pre-wrap break-words">{msg.text}</p>
-        <div
-          className={cn(
-            "mt-1 flex items-center gap-2 text-xs",
-            isBoss ? "text-primary-foreground/70" : "text-muted-foreground"
-          )}
-        >
-          <span>{formatTime(msg.createdAt)}</span>
-          {pendingHint && <span className="italic">{pendingHint}</span>}
-        </div>
-      </div>
-    </div>
-  );
-}
+import { type AgentWsStatus, useWebSocket } from "@/hooks/useWebSocket";
 
 export function ProjectChatPage() {
   const { id } = useParams<{ id: string }>();
@@ -58,6 +19,7 @@ export function ProjectChatPage() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [agentRunning, setAgentRunning] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const loadMessages = useCallback(async () => {
@@ -75,10 +37,15 @@ export function ProjectChatPage() {
     console.warn("项目聊天 websocket 错误:", err);
   }, []);
 
+  const handleStatusUpdate = useCallback((status: AgentWsStatus) => {
+    setAgentRunning(status.agentState === "running");
+  }, []);
+
   const { connected, authenticated } = useWebSocket({
     agentName: project?.speakerAgent ?? "",
     enabled: Boolean(project?.speakerAgent),
     onMessage: handleWsMessage,
+    onStatusUpdate: handleStatusUpdate,
     onError: handleWsError,
   });
 
@@ -164,7 +131,7 @@ export function ProjectChatPage() {
           : "加载项目上下文中..."}
       </div>
 
-      <div className="flex-1 space-y-3 overflow-y-auto p-4">
+      <div className="flex-1 space-y-4 overflow-y-auto px-4 py-5">
         {loading ? (
           <p className="text-center text-muted-foreground">加载消息中...</p>
         ) : messages.length === 0 ? (
@@ -176,8 +143,11 @@ export function ProjectChatPage() {
             </Card>
           </div>
         ) : (
-          messages.map((msg) => <MessageBubble key={msg.id} msg={msg} />)
+          messages.map((msg) => (
+            <MessageBubble key={msg.id} msg={msg as ChatMessageData} agentName={project?.speakerAgent} />
+          ))
         )}
+        {project?.speakerAgent && <TypingIndicator agentName={project.speakerAgent} visible={agentRunning} />}
         <div ref={messagesEndRef} />
       </div>
 

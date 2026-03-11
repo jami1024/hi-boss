@@ -365,7 +365,7 @@ export interface AgentStatusResult {
   };
   status: {
     agentState: "running" | "idle";
-    agentHealth: "ok" | "error" | "unknown";
+    agentHealth: "ok" | "degraded" | "error" | "unknown";
     pendingCount: number;
     currentRun?: {
       id: string;

@@ -7,6 +7,7 @@ import { sendJson } from "../router.js";
 import { requireBossToken } from "../middleware/auth.js";
 import type { DaemonContext } from "../../daemon/rpc/context.js";
 import { resolveSessionRefreshTargetForAgent } from "../../agent/executor.js";
+import { computeAgentHealth } from "../../shared/agent-health.js";
 
 function agentSummary(agent: any, bindings: string[]) {
   return {
@@ -88,8 +89,10 @@ export function createAgentHandlers(daemon: DaemonContext): Record<string, Route
     const isBusy = daemon.executor.isAgentBusy(agent.name);
     const pendingCount = daemon.db.countDuePendingEnvelopesForAgent(agent.name);
     const agentBindings = daemon.db.getBindingsByAgentName(agent.name).map((b) => b.adapterType);
+    const recentRuns = daemon.db.getRecentFinishedAgentRuns(agent.name, 5);
+    const healthResetAt = typeof agent.metadata?.healthResetAt === "number" ? agent.metadata.healthResetAt : undefined;
     const currentRun = isBusy ? daemon.db.getCurrentRunningAgentRun(agent.name) : null;
-    const lastRun = daemon.db.getLastFinishedAgentRun(agent.name);
+    const lastRun = recentRuns[0] ?? null;
     const currentSessionTarget = currentRun
       ? resolveSessionRefreshTargetForAgent({ db: daemon.db, agentName: agent.name })
       : undefined;
@@ -102,7 +105,7 @@ export function createAgentHandlers(daemon: DaemonContext): Record<string, Route
       bindings: agentBindings,
       status: {
         agentState: isBusy ? "running" : "idle",
-        agentHealth: !lastRun ? "unknown" : lastRun.status === "failed" ? "error" : "ok",
+        agentHealth: computeAgentHealth(recentRuns, healthResetAt),
         pendingCount,
         currentRun: currentRun
           ? {

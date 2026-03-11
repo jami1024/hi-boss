@@ -1,6 +1,6 @@
 export interface ProjectAgentRuntimeSnapshot {
   state: "running" | "idle";
-  health: "ok" | "error" | "unknown";
+  health: "ok" | "degraded" | "error" | "unknown";
   pendingCount: number;
   projectId?: string;
   sessionTarget?: string;

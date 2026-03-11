@@ -10,6 +10,7 @@ import type {
 import { RPC_ERRORS } from "../ipc/types.js";
 import type { DaemonContext } from "./context.js";
 import { requireToken, rpcError } from "./context.js";
+import { computeAgentHealth } from "../../shared/agent-health.js";
 
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{1,63}$/;
 
@@ -31,10 +32,11 @@ function parseCapabilityValues(raw: unknown): string[] {
     .sort((a, b) => a.localeCompare(b));
 }
 
-function healthRank(health: "ok" | "unknown" | "error"): number {
+function healthRank(health: "ok" | "degraded" | "unknown" | "error"): number {
   if (health === "ok") return 0;
-  if (health === "unknown") return 1;
-  return 2;
+  if (health === "degraded") return 1;
+  if (health === "unknown") return 2;
+  return 3;
 }
 
 export function createProjectHandlers(ctx: DaemonContext): RpcMethodRegistry {
@@ -131,9 +133,9 @@ export function createProjectHandlers(ctx: DaemonContext): RpcMethodRegistry {
         const agent = ctx.db.getAgentByNameCaseInsensitive(leader.agentName);
         if (!agent) return null;
 
-        const lastRun = ctx.db.getLastFinishedAgentRun(agent.name);
-        const agentHealth: "ok" | "unknown" | "error" =
-          !lastRun ? "unknown" : lastRun.status === "failed" ? "error" : "ok";
+        const recentRuns = ctx.db.getRecentFinishedAgentRuns(agent.name, 5);
+        const healthResetAt = typeof agent.metadata?.healthResetAt === "number" ? agent.metadata.healthResetAt : undefined;
+        const agentHealth = computeAgentHealth(recentRuns, healthResetAt);
 
         return {
           agentName: agent.name,
