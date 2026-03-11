@@ -277,6 +277,32 @@ export interface ProjectUpdateParams {
   mainGroupChannel?: string | null;
 }
 
+// ==================== Conversation Types ====================
+
+export interface Conversation {
+  id: string;
+  agentName: string;
+  projectId?: string;
+  title?: string;
+  provider?: string;
+  sessionId?: string;
+  permissionOverride?: "full-access";
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ConversationMessage {
+  id: string;
+  from: string;
+  to: string;
+  fromBoss: boolean;
+  text: string;
+  status: string;
+  createdAt: number;
+  permissionEscalatable?: boolean;
+  replyToEnvelopeId?: string;
+}
+
 // ==================== Prompt Types ====================
 
 export interface PromptFileEntry {
@@ -715,4 +741,47 @@ export const api = {
 
   getEnvelope: (id: string) =>
     request<{ envelope: EnvelopeDetail }>("GET", `/envelopes/${encodeURIComponent(id)}`),
+
+  // Conversations
+  createConversation: (body: { agentName: string; projectId?: string; title?: string }) =>
+    request<Conversation>("POST", "/conversations", body),
+
+  listConversations: (opts?: { agentName?: string; projectId?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.agentName) params.set("agentName", opts.agentName);
+    if (opts?.projectId) params.set("projectId", opts.projectId);
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    return request<{ conversations: Conversation[] }>("GET", `/conversations${qs ? `?${qs}` : ""}`);
+  },
+
+  getConversation: (id: string) =>
+    request<{ conversation: Conversation }>("GET", `/conversations/${encodeURIComponent(id)}`),
+
+  listConversationMessages: (id: string, opts?: { limit?: number; before?: number }) => {
+    const params = new URLSearchParams();
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.before) params.set("before", String(opts.before));
+    const qs = params.toString();
+    return request<{ messages: ConversationMessage[] }>(
+      "GET",
+      `/conversations/${encodeURIComponent(id)}/messages${qs ? `?${qs}` : ""}`
+    );
+  },
+
+  sendConversationMessage: (id: string, text: string) =>
+    request<{ id: string }>("POST", `/conversations/${encodeURIComponent(id)}/send`, { text }),
+
+  updateConversation: (id: string, body: { title: string }) =>
+    request<{ conversation: Conversation }>("PUT", `/conversations/${encodeURIComponent(id)}`, body),
+
+  deleteConversation: (id: string) =>
+    request<{ ok: boolean }>("DELETE", `/conversations/${encodeURIComponent(id)}`),
+
+  grantConversationAccess: (id: string, retryText?: string) =>
+    request<{ conversation: Conversation; retryEnvelopeId?: string }>(
+      "POST",
+      `/conversations/${encodeURIComponent(id)}/grant-access`,
+      retryText ? { retryText } : undefined,
+    ),
 };

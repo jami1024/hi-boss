@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { Bot, User } from "lucide-react";
+import { Bot, ShieldCheck, User } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 export interface ChatMessageData {
   id: string;
@@ -10,6 +12,8 @@ export interface ChatMessageData {
   status: string;
   createdAt: number;
   clientMessageId?: string;
+  permissionEscalatable?: boolean;
+  replyToEnvelopeId?: string;
 }
 
 function formatTime(ms: number): string {
@@ -28,9 +32,11 @@ function extractSenderName(from: string, isBoss: boolean): string {
 interface MessageBubbleProps {
   msg: ChatMessageData;
   agentName?: string;
+  onGrantAccess?: (msg: ChatMessageData) => Promise<void>;
 }
 
-export function MessageBubble({ msg }: MessageBubbleProps) {
+export function MessageBubble({ msg, onGrantAccess }: MessageBubbleProps) {
+  const [granting, setGranting] = useState(false);
   const isBoss = msg.fromBoss || msg.from === "channel:web:boss";
   const senderName = extractSenderName(msg.from, isBoss);
 
@@ -80,6 +86,27 @@ export function MessageBubble({ msg }: MessageBubbleProps) {
         >
           <p className="whitespace-pre-wrap break-words">{msg.text}</p>
         </div>
+
+        {/* Permission escalation button */}
+        {msg.permissionEscalatable && onGrantAccess && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-2 gap-1.5 border-amber-500/40 text-amber-600 hover:bg-amber-50 hover:text-amber-700 dark:text-amber-400 dark:hover:bg-amber-950 dark:hover:text-amber-300"
+            disabled={granting}
+            onClick={async () => {
+              setGranting(true);
+              try {
+                await onGrantAccess(msg);
+              } finally {
+                setGranting(false);
+              }
+            }}
+          >
+            <ShieldCheck className="size-3.5" />
+            {granting ? "授权中..." : "授权完整访问并重试"}
+          </Button>
+        )}
 
         {/* Footer */}
         <div

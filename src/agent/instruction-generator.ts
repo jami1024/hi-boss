@@ -55,7 +55,7 @@ export function readAgentSkillSummary(params: { hibossDir: string; agentName: st
 
     return fs
       .readdirSync(skillsRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
+      .filter((entry) => entry.isDirectory() && entry.name !== "_system")
       .map((entry) => entry.name)
       .sort((a, b) => a.localeCompare(b))
       .slice(0, MAX_AGENT_SKILL_LINES)
@@ -175,4 +175,93 @@ export function generateSystemInstructions(ctx: InstructionContext): string {
     template: "system/base.md",
     context: promptContext,
   });
+}
+
+/**
+ * Generate split system instructions: stable (for skill inject) + dynamic (for inline).
+ *
+ * The stable content includes agent identity, roles, CLI tools, and operating rules.
+ * The dynamic content includes memory snapshots, environment, and additional context.
+ *
+ * Only used for Claude provider — Codex continues using generateSystemInstructions().
+ */
+export function generateSplitSystemInstructions(ctx: InstructionContext): {
+  stableContent: string;
+  dynamicContent: string;
+} {
+  const { agent, agentToken, bindings, additionalContext, boss } = ctx;
+
+  const promptContext = buildSystemPromptContext({
+    agent,
+    agentToken,
+    bindings: bindings ?? [],
+    runtimeWorkspace: ctx.runtimeWorkspace,
+    time: { bossTimezone: ctx.bossTimezone },
+    hibossDir: ctx.hibossDir,
+    boss,
+  });
+
+  // Inject memory snapshots (same as generateSystemInstructions).
+  const hibossDir = ctx.hibossDir ?? (promptContext.hiboss as Record<string, unknown>).dir as string;
+  const spaceContext = promptContext.internalSpace as Record<string, unknown>;
+  const ensured = ensureAgentInternalSpaceLayout({ hibossDir, agentName: agent.name });
+  if (!ensured.ok) {
+    spaceContext.note = "";
+    spaceContext.noteFence = "```";
+    spaceContext.error = ensured.error;
+    spaceContext.daily = "";
+    spaceContext.dailyFence = "```";
+    spaceContext.dailyError = ensured.error;
+  } else {
+    const snapshot = readAgentInternalMemorySnapshot({ hibossDir, agentName: agent.name });
+    if (snapshot.ok) {
+      spaceContext.note = snapshot.note;
+      spaceContext.noteFence = chooseFence(snapshot.note);
+      spaceContext.error = "";
+    } else {
+      spaceContext.note = "";
+      spaceContext.noteFence = "```";
+      spaceContext.error = snapshot.error;
+    }
+
+    const dailySnapshot = readAgentInternalDailyMemorySnapshot({ hibossDir, agentName: agent.name });
+    if (dailySnapshot.ok) {
+      spaceContext.daily = dailySnapshot.note;
+      spaceContext.dailyFence = chooseFence(dailySnapshot.note);
+      spaceContext.dailyError = "";
+    } else {
+      spaceContext.daily = "";
+      spaceContext.dailyFence = "```";
+      spaceContext.dailyError = dailySnapshot.error;
+    }
+  }
+
+  // Build additional context (same as generateSystemInstructions).
+  const agentSkillSummary = readAgentSkillSummary({ hibossDir, agentName: agent.name });
+  const additionalContextSections: string[] = [];
+  if (agentSkillSummary.length > 0) {
+    additionalContextSections.push("## agent-remote-skills", ...agentSkillSummary);
+  }
+  if (additionalContext?.trim()) {
+    if (additionalContextSections.length > 0) {
+      additionalContextSections.push("");
+    }
+    additionalContextSections.push(additionalContext.trim());
+  }
+  (promptContext.hiboss as Record<string, unknown>).additionalContext =
+    additionalContextSections.join("\n");
+
+  const stableContent = renderPrompt({
+    surface: "system",
+    template: "system/base-stable.md",
+    context: promptContext,
+  });
+
+  const dynamicContent = renderPrompt({
+    surface: "system",
+    template: "system/base-dynamic.md",
+    context: promptContext,
+  });
+
+  return { stableContent, dynamicContent };
 }

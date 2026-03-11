@@ -15,7 +15,8 @@ export interface ResolvedExecutionPolicy {
     | "read-search-bypass"
     | "background-read-search-bypass"
     | "default-safe-mode"
-    | "background-safe-default";
+    | "background-safe-default"
+    | "conversation-permission-override";
 }
 
 const READ_SEARCH_PATTERN =

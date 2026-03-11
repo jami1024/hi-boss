@@ -54,6 +54,7 @@ export class MessageRouter {
    * Route a new envelope to its destination.
    */
   async routeEnvelope(input: CreateEnvelopeInput): Promise<Envelope> {
+    this.propagateConversationId(input);
     this.validateProjectScopedRoute(input);
     const envelope = this.db.createEnvelope(input);
 
@@ -82,6 +83,33 @@ export class MessageRouter {
       await this.deliverEnvelope(envelope);
     }
     return envelope;
+  }
+
+  /**
+   * Auto-propagate conversationId from the referenced envelope when the reply
+   * envelope doesn't already carry one.  Only applies to agent→channel replies
+   * (not agent→agent dispatches, which should not share conversation sessions).
+   */
+  private propagateConversationId(input: CreateEnvelopeInput): void {
+    const md = input.metadata as Record<string, unknown> | undefined;
+    if (!md) return;
+    // Already has conversationId — nothing to do.
+    if (typeof md.conversationId === "string" && md.conversationId.trim()) return;
+    // Only propagate for channel destinations (agent→boss replies).
+    try {
+      const target = parseAddress(input.to);
+      if (target.type !== "channel") return;
+    } catch {
+      return;
+    }
+    const replyToId = md.replyToEnvelopeId;
+    if (typeof replyToId !== "string" || !replyToId.trim()) return;
+    const parent = this.db.getEnvelopeById(replyToId.trim());
+    if (!parent?.metadata || typeof parent.metadata !== "object") return;
+    const parentConversationId = (parent.metadata as Record<string, unknown>).conversationId;
+    if (typeof parentConversationId === "string" && parentConversationId.trim()) {
+      md.conversationId = parentConversationId.trim();
+    }
   }
 
   private validateProjectScopedRoute(input: CreateEnvelopeInput): void {

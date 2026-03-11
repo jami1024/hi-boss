@@ -38,6 +38,7 @@ interface WsClientMessage {
   agentName?: string;
   text?: string;
   clientMessageId?: string;
+  conversationId?: string;
 }
 
 function parseProjectIdFromSessionTarget(agentName: string, sessionTarget: string): string | undefined {
@@ -67,6 +68,14 @@ export interface AgentWsStatusPayload {
   };
 }
 
+function readConversationIdFromMetadata(metadata: Record<string, unknown> | undefined): string | undefined {
+  if (!metadata) return undefined;
+  const raw = metadata.conversationId;
+  if (typeof raw !== "string") return undefined;
+  const normalized = raw.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 export interface WsEnvelopePayload {
   id: string;
   from: string;
@@ -76,12 +85,17 @@ export interface WsEnvelopePayload {
   status: string;
   createdAt: number;
   clientMessageId?: string;
+  conversationId?: string;
+  permissionEscalatable?: boolean;
+  replyToEnvelopeId?: string;
 }
 
 export function buildWsEnvelopePayload(envelope: Envelope): WsEnvelopePayload {
-  const clientMessageId = readClientMessageIdFromMetadata(
-    envelope.metadata as Record<string, unknown> | undefined
-  );
+  const md = envelope.metadata as Record<string, unknown> | undefined;
+  const clientMessageId = readClientMessageIdFromMetadata(md);
+  const conversationId = readConversationIdFromMetadata(md);
+  const permissionEscalatable = md?.permissionEscalatable === true;
+  const replyToEnvelopeId = typeof md?.replyToEnvelopeId === "string" ? md.replyToEnvelopeId : undefined;
   return {
     id: envelope.id,
     from: envelope.from,
@@ -91,6 +105,9 @@ export function buildWsEnvelopePayload(envelope: Envelope): WsEnvelopePayload {
     status: envelope.status,
     createdAt: envelope.createdAt,
     ...(clientMessageId ? { clientMessageId } : {}),
+    ...(conversationId ? { conversationId } : {}),
+    ...(permissionEscalatable ? { permissionEscalatable: true } : {}),
+    ...(replyToEnvelopeId ? { replyToEnvelopeId } : {}),
   };
 }
 
@@ -243,7 +260,7 @@ export class ChatWebSocket {
         this.handleAuth(client, msg.token ?? "");
         break;
       case "send":
-        this.handleSend(client, msg.agentName ?? "", msg.text ?? "", msg.clientMessageId ?? "");
+        this.handleSend(client, msg.agentName ?? "", msg.text ?? "", msg.clientMessageId ?? "", msg.conversationId ?? "");
         break;
       case "subscribe":
         this.handleSubscribe(client, msg.agentName ?? "");
@@ -282,7 +299,8 @@ export class ChatWebSocket {
     client: WsClient,
     agentName: string,
     text: string,
-    clientMessageIdRaw: string
+    clientMessageIdRaw: string,
+    conversationIdRaw: string
   ): Promise<void> {
     if (!client.authenticated) {
       this.send(client, { type: "error", message: "Not authenticated" });
@@ -313,6 +331,7 @@ export class ChatWebSocket {
 
     try {
       const clientMessageId = clientMessageIdRaw.trim();
+      const conversationId = conversationIdRaw.trim();
       const envelope = await this.daemon.router.routeEnvelope({
         from: WEB_BOSS_ADDRESS,
         to: formatAgentAddress(agent.name),
@@ -321,6 +340,7 @@ export class ChatWebSocket {
         metadata: {
           source: "web",
           ...(clientMessageId ? { clientMessageId } : {}),
+          ...(conversationId ? { conversationId } : {}),
         },
       });
 

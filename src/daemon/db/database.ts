@@ -183,6 +183,19 @@ interface TaskProgressRow {
   created_at: number;
 }
 
+interface ConversationRow {
+  id: string;
+  agent_name: string;
+  project_id: string | null;
+  title: string | null;
+  provider: string | null;
+  session_id: string | null;
+  session_metadata: string | null;
+  permission_override: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 /**
  * Agent binding type.
  */
@@ -210,6 +223,22 @@ export interface AgentRun {
 }
 
 /**
+ * Conversation type for session tracking.
+ */
+export interface Conversation {
+  id: string;
+  agentName: string;
+  projectId?: string;
+  title?: string;
+  provider?: string;
+  sessionId?: string;
+  sessionMetadata?: Record<string, unknown>;
+  permissionOverride?: "full-access";
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
  * SQLite database wrapper for Hi-Boss.
  */
 export class HiBossDatabase {
@@ -231,6 +260,7 @@ export class HiBossDatabase {
     this.db.exec(SCHEMA_SQL);
     this.migrateWorkItemSchema();
     this.migrateProjectLeaderSchema();
+    this.migrateConversationSchema();
     this.assertSchemaCompatible();
     this.reconcileStaleAgentRunsOnStartup();
   }
@@ -283,6 +313,16 @@ export class HiBossDatabase {
     const existing = new Set(info.map((column) => column.name));
     if (!existing.has("allow_dispatch_to")) {
       this.db.exec("ALTER TABLE project_leaders ADD COLUMN allow_dispatch_to TEXT");
+    }
+  }
+
+  private migrateConversationSchema(): void {
+    const info = this.db.prepare("PRAGMA table_info(conversations)").all() as Array<{ name: string }>;
+    if (info.length === 0) return;
+
+    const existing = new Set(info.map((c) => c.name));
+    if (!existing.has("permission_override")) {
+      this.db.exec("ALTER TABLE conversations ADD COLUMN permission_override TEXT");
     }
   }
 
@@ -417,6 +457,18 @@ export class HiBossDatabase {
         "content",
         "todos",
         "created_at",
+      ],
+      conversations: [
+        "id",
+        "agent_name",
+        "project_id",
+        "title",
+        "provider",
+        "session_id",
+        "session_metadata",
+        "permission_override",
+        "created_at",
+        "updated_at",
       ],
     };
 
@@ -2944,5 +2996,131 @@ export class HiBossDatabase {
    */
   setAdapterBossId(adapterType: string, bossId: string): void {
     this.setConfig(`adapter_boss_id_${adapterType}`, bossId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Conversations
+  // ---------------------------------------------------------------------------
+
+  private rowToConversation(row: ConversationRow): Conversation {
+    return {
+      id: row.id,
+      agentName: row.agent_name,
+      ...(row.project_id ? { projectId: row.project_id } : {}),
+      ...(row.title ? { title: row.title } : {}),
+      ...(row.provider ? { provider: row.provider } : {}),
+      ...(row.session_id ? { sessionId: row.session_id } : {}),
+      ...(row.session_metadata ? { sessionMetadata: JSON.parse(row.session_metadata) as Record<string, unknown> } : {}),
+      ...(row.permission_override === "full-access" ? { permissionOverride: "full-access" as const } : {}),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  createConversation(input: {
+    agentName: string;
+    projectId?: string;
+    title?: string;
+    provider?: string;
+  }): Conversation {
+    const id = generateUUID();
+    const now = Date.now();
+    const stmt = this.db.prepare(`
+      INSERT INTO conversations (id, agent_name, project_id, title, provider, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(id, input.agentName, input.projectId ?? null, input.title ?? null, input.provider ?? null, now, now);
+    return this.getConversationById(id)!;
+  }
+
+  getConversationById(id: string): Conversation | null {
+    const stmt = this.db.prepare("SELECT * FROM conversations WHERE id = ?");
+    const row = stmt.get(id) as ConversationRow | undefined;
+    return row ? this.rowToConversation(row) : null;
+  }
+
+  listConversations(options: {
+    agentName?: string;
+    projectId?: string;
+    limit: number;
+  }): Conversation[] {
+    let sql = "SELECT * FROM conversations WHERE 1=1";
+    const params: (string | number)[] = [];
+
+    if (options.agentName) {
+      sql += " AND agent_name = ?";
+      params.push(options.agentName);
+    }
+    if (options.projectId) {
+      sql += " AND project_id = ?";
+      params.push(options.projectId);
+    }
+
+    sql += " ORDER BY updated_at DESC LIMIT ?";
+    params.push(options.limit);
+
+    const rows = this.db.prepare(sql).all(...params) as ConversationRow[];
+    return rows.map((row) => this.rowToConversation(row));
+  }
+
+  updateConversationTitle(id: string, title: string): void {
+    this.db.prepare("UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?")
+      .run(title, Date.now(), id);
+  }
+
+  updateConversationSession(id: string, params: {
+    provider: string;
+    sessionId: string;
+    sessionMetadata?: Record<string, unknown>;
+  }): void {
+    this.db.prepare(
+      "UPDATE conversations SET provider = ?, session_id = ?, session_metadata = ?, updated_at = ? WHERE id = ?"
+    ).run(
+      params.provider,
+      params.sessionId,
+      params.sessionMetadata ? JSON.stringify(params.sessionMetadata) : null,
+      Date.now(),
+      id,
+    );
+  }
+
+  updateConversationActivity(id: string): void {
+    this.db.prepare("UPDATE conversations SET updated_at = ? WHERE id = ?")
+      .run(Date.now(), id);
+  }
+
+  updateConversationPermissionOverride(id: string, override: "full-access" | null): void {
+    this.db.prepare("UPDATE conversations SET permission_override = ?, updated_at = ? WHERE id = ?")
+      .run(override, Date.now(), id);
+  }
+
+  deleteConversation(id: string): void {
+    this.db.prepare("DELETE FROM conversations WHERE id = ?").run(id);
+  }
+
+  deleteExpiredConversations(maxAgeMs: number): number {
+    const cutoff = Date.now() - maxAgeMs;
+    const result = this.db.prepare("DELETE FROM conversations WHERE updated_at < ?").run(cutoff);
+    return result.changes;
+  }
+
+  listConversationEnvelopes(options: {
+    conversationId: string;
+    limit: number;
+    createdBefore?: number;
+  }): Envelope[] {
+    let sql = `SELECT * FROM envelopes WHERE json_extract(metadata, '$.conversationId') = ?`;
+    const params: (string | number)[] = [options.conversationId];
+
+    if (typeof options.createdBefore === "number") {
+      sql += " AND created_at < ?";
+      params.push(options.createdBefore);
+    }
+
+    sql += " ORDER BY created_at DESC LIMIT ?";
+    params.push(options.limit);
+
+    const rows = this.db.prepare(sql).all(...params) as EnvelopeRow[];
+    return rows.map((row) => this.rowToEnvelope(row)).reverse();
   }
 }
