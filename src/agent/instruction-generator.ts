@@ -46,7 +46,7 @@ function extractSkillSummary(content: string): string {
   return "(no summary)";
 }
 
-function readAgentSkillSummary(params: { hibossDir: string; agentName: string }): string[] {
+export function readAgentSkillSummary(params: { hibossDir: string; agentName: string }): string[] {
   const skillsRoot = path.join(getAgentDir(params.agentName, params.hibossDir), "skills");
   try {
     if (!fs.existsSync(skillsRoot)) return [];

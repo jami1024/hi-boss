@@ -40,6 +40,7 @@ import { RemoteSkillManager } from "@/components/RemoteSkillManager";
 function healthLabel(health: string): string {
   switch (health) {
     case "ok": return "健康";
+    case "degraded": return "亚健康";
     case "error": return "异常";
     default: return "未知";
   }
@@ -48,8 +49,9 @@ function healthLabel(health: string): string {
 function healthColor(health: string): string {
   switch (health) {
     case "ok": return "text-green-600";
+    case "degraded": return "text-yellow-600";
     case "error": return "text-red-600";
-    default: return "text-yellow-600";
+    default: return "text-gray-500";
   }
 }
 
@@ -449,9 +451,12 @@ export function AgentDetailPage() {
                   id="description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="智能体描述..."
-                  rows={3}
+                  placeholder={"负责前端开发，擅长 React/TypeScript。\n可处理：UI组件开发、样式调整、页面路由、状态管理。\n不擅长：后端API、数据库操作。"}
+                  rows={4}
                 />
+                <p className="text-xs text-muted-foreground">
+                  描述会展示给发言者智能体，用于判断将哪些任务分配给该智能体。建议分行写明职责、擅长领域和不擅长领域。
+                </p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="workspace">工作目录</Label>

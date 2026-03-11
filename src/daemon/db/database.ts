@@ -728,6 +728,34 @@ export class HiBossDatabase {
   }
 
   /**
+   * Set or clear the `metadata.healthResetAt` timestamp.
+   *
+   * When set, the agent health computation ignores runs started before this timestamp.
+   */
+  setAgentHealthResetAt(name: string, timestampMs: number | null): void {
+    if (timestampMs === null) {
+      const stmt = this.db.prepare(`
+        UPDATE agents
+        SET metadata = CASE
+          WHEN metadata IS NULL THEN NULL
+          WHEN json_remove(metadata, '$.healthResetAt') = '{}' THEN NULL
+          ELSE json_remove(metadata, '$.healthResetAt')
+        END
+        WHERE name = ?
+      `);
+      stmt.run(name);
+      return;
+    }
+
+    const stmt = this.db.prepare(`
+      UPDATE agents
+      SET metadata = json_set(COALESCE(metadata, '{}'), '$.healthResetAt', ?)
+      WHERE name = ?
+    `);
+    stmt.run(timestampMs, name);
+  }
+
+  /**
    * Replace user-controlled agent metadata, preserving the reserved `metadata.sessionHandle` field when present.
    *
    * - When `metadata` is `null`, user metadata is cleared but `sessionHandle` is preserved if it exists.
@@ -1592,6 +1620,20 @@ export class HiBossDatabase {
     `);
     const row = stmt.get(agentName) as AgentRunRow | undefined;
     return row ? this.rowToAgentRun(row) : null;
+  }
+
+  /**
+   * Get the N most recent finished runs for an agent (for sliding-window health).
+   */
+  getRecentFinishedAgentRuns(agentName: string, limit = 5): AgentRun[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM agent_runs
+      WHERE agent_name = ? AND status IN ('completed', 'failed', 'cancelled')
+      ORDER BY started_at DESC
+      LIMIT ?
+    `);
+    const rows = stmt.all(agentName, limit) as AgentRunRow[];
+    return rows.map((row) => this.rowToAgentRun(row));
   }
 
   /**

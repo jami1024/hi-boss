@@ -8,6 +8,7 @@ import {
 } from "../shared/defaults.js";
 import { formatUnixMsAsTimeZoneOffset } from "../shared/time.js";
 import { formatShortId } from "../shared/id-format.js";
+import { computeAgentHealth } from "../shared/agent-health.js";
 
 type EnrichedChannelCommand = ChannelCommand & { agentName?: string; platform?: string };
 
@@ -40,7 +41,9 @@ function buildAgentStatusText(params: { db: HiBossDatabase; executor: AgentExecu
   const bindings = params.db.getBindingsByAgentName(agent.name).map((b) => b.adapterType);
 
   const currentRun = isBusy ? params.db.getCurrentRunningAgentRun(agent.name) : null;
-  const lastRun = params.db.getLastFinishedAgentRun(agent.name);
+  const recentRuns = params.db.getRecentFinishedAgentRuns(agent.name, 5);
+  const healthResetAt = typeof agent.metadata?.healthResetAt === "number" ? agent.metadata.healthResetAt : undefined;
+  const lastRun = recentRuns[0] ?? null;
 
   const lines: string[] = [];
   lines.push(`name: ${agent.name}`);
@@ -67,7 +70,7 @@ function buildAgentStatusText(params: { db: HiBossDatabase; executor: AgentExecu
   }
 
   const agentState = isBusy ? "running" : "idle";
-  const agentHealth = !lastRun ? "unknown" : lastRun.status === "failed" ? "error" : "ok";
+  const agentHealth = computeAgentHealth(recentRuns, healthResetAt);
 
   lines.push(`agent-state: ${agentState}`);
   lines.push(`agent-health: ${agentHealth}`);

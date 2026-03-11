@@ -2,7 +2,7 @@ import type { DaemonStatus } from "../api/client.js";
 
 export interface AgentStatusUpdate {
   agentState: "running" | "idle";
-  agentHealth: "ok" | "error" | "unknown";
+  agentHealth: "ok" | "degraded" | "error" | "unknown";
   pendingCount: number;
   currentRun?: {
     id: string;

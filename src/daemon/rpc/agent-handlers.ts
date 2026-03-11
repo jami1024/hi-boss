@@ -34,6 +34,7 @@ import {
   buildMutationInvariantViolationMessage,
 } from "../../shared/agent-role-mutation.js";
 import { resolveSessionRefreshTargetForAgent } from "../../agent/executor.js";
+import { computeAgentHealth } from "../../shared/agent-health.js";
 
 const PROJECT_ID_PATTERN = /^[a-z0-9][a-z0-9._:-]{1,63}$/;
 
@@ -147,7 +148,9 @@ export function createAgentHandlers(ctx: DaemonContext): RpcMethodRegistry {
       const resolvedRole = requireRole(agent.name, agent.metadata);
 
       const currentRun = isBusy ? ctx.db.getCurrentRunningAgentRun(agent.name) : null;
-      const lastRun = ctx.db.getLastFinishedAgentRun(agent.name);
+      const recentRuns = ctx.db.getRecentFinishedAgentRuns(agent.name, 5);
+      const healthResetAt = typeof agent.metadata?.healthResetAt === "number" ? agent.metadata.healthResetAt : undefined;
+      const lastRun = recentRuns[0] ?? null;
       const currentSessionTarget = currentRun
         ? resolveSessionRefreshTargetForAgent({ db: ctx.db, agentName: agent.name })
         : undefined;
@@ -175,7 +178,7 @@ export function createAgentHandlers(ctx: DaemonContext): RpcMethodRegistry {
         },
         status: {
           agentState: isBusy ? "running" : "idle",
-          agentHealth: !lastRun ? "unknown" : lastRun.status === "failed" ? "error" : "ok",
+          agentHealth: computeAgentHealth(recentRuns, healthResetAt),
           pendingCount,
           ...(currentRun
             ? {
@@ -363,6 +366,9 @@ export function createAgentHandlers(ctx: DaemonContext): RpcMethodRegistry {
       if (!agent) {
         rpcError(RPC_ERRORS.NOT_FOUND, "Agent not found");
       }
+
+      // Reset health state so the agent starts fresh after refresh
+      ctx.db.setAgentHealthResetAt(agent.name, Date.now());
 
       const projectId = normalizeProjectId(p.projectId);
 

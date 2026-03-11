@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, type ProjectSummary } from "@/api/client";
+import { MessageBubble, type ChatMessageData } from "@/components/chat/MessageBubble";
+import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,56 +14,12 @@ import {
   type ChatMessage,
   useWebSocket,
 } from "@/hooks/useWebSocket";
-import { cn } from "@/lib/utils";
-
-function formatTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 function stateLabel(state: string): string {
   if (state === "running") return "运行中";
   if (state === "idle") return "空闲";
   if (state === "stopped") return "已停止";
   return "未知";
-}
-
-function MessageBubble({ msg }: { msg: ChatMessage }) {
-  const isBoss = msg.fromBoss || msg.from === "channel:web:boss";
-  const pendingHint =
-    msg.status !== "pending"
-      ? null
-      : msg.id.startsWith("local:")
-        ? "发送中..."
-        : isBoss
-          ? "排队中..."
-          : "处理中...";
-
-  return (
-    <div className={cn("flex", isBoss ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "max-w-[75%] rounded-2xl px-4 py-2.5 text-sm shadow-sm",
-          isBoss
-            ? "bg-gradient-to-br from-primary to-primary/85 text-primary-foreground"
-            : "border border-border/70 bg-card text-foreground"
-        )}
-      >
-        <p className="whitespace-pre-wrap break-words">{msg.text}</p>
-        <div
-          className={cn(
-            "mt-1 flex items-center gap-2 text-xs",
-            isBoss ? "text-primary-foreground/70" : "text-muted-foreground"
-          )}
-        >
-          <span>{formatTime(msg.createdAt)}</span>
-          {pendingHint && <span className="italic">{pendingHint}</span>}
-        </div>
-      </div>
-    </div>
-  );
 }
 
 export function AgentChatPage() {
@@ -372,7 +330,7 @@ export function AgentChatPage() {
       {/* Messages */}
       <div
         ref={containerRef}
-        className="flex-1 space-y-3 overflow-y-auto p-4"
+        className="flex-1 space-y-4 overflow-y-auto px-4 py-5"
       >
         {loading ? (
           <p className="text-center text-muted-foreground">
@@ -390,8 +348,11 @@ export function AgentChatPage() {
             </Card>
           </div>
         ) : (
-          messages.map((msg) => <MessageBubble key={msg.id} msg={msg} />)
+          messages.map((msg) => (
+            <MessageBubble key={msg.id} msg={msg as ChatMessageData} agentName={name} />
+          ))
         )}
+        {name && <TypingIndicator agentName={name} visible={agentStatus?.state === "running"} />}
         <div ref={messagesEndRef} />
       </div>
 

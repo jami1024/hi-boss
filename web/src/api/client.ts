@@ -104,7 +104,7 @@ export interface SessionPolicy {
 
 export interface AgentStatus {
   agentState: "running" | "idle";
-  agentHealth: "ok" | "error" | "unknown";
+  agentHealth: "ok" | "degraded" | "error" | "unknown";
   pendingCount: number;
   currentRun: {
     id: string;
@@ -355,7 +355,7 @@ export interface DaemonStatus {
     role: string | null;
     provider: string | null;
     state: "running" | "idle";
-    health: "ok" | "error" | "unknown";
+    health: "ok" | "degraded" | "error" | "unknown";
     pendingCount: number;
     currentRun?: {
       id: string;

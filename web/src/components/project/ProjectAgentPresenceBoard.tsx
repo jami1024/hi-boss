@@ -14,6 +14,7 @@ interface ProjectAgentPresenceBoardProps {
 
 function healthLabel(health: ProjectAgentRuntimeSnapshot["health"] | undefined): string {
   if (health === "ok") return "健康";
+  if (health === "degraded") return "亚健康";
   if (health === "error") return "异常";
   return "未知";
 }
@@ -30,6 +31,7 @@ function stateLabel(state: ProjectAgentRuntimeSnapshot["state"] | undefined): st
 
 function healthVariant(health: ProjectAgentRuntimeSnapshot["health"] | undefined): "default" | "secondary" | "destructive" | "outline" {
   if (health === "ok") return "default";
+  if (health === "degraded") return "secondary";
   if (health === "error") return "destructive";
   return "outline";
 }

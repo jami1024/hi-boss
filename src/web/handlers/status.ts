@@ -7,6 +7,7 @@ import { sendJson } from "../router.js";
 import { requireBossToken } from "../middleware/auth.js";
 import type { DaemonContext } from "../../daemon/rpc/context.js";
 import { resolveSessionRefreshTargetForAgent } from "../../agent/executor.js";
+import { computeAgentHealth } from "../../shared/agent-health.js";
 
 function parseProjectIdFromSessionTarget(agentName: string, sessionTarget: string): string | undefined {
   const prefix = `${agentName}:`;
@@ -28,7 +29,8 @@ export function createStatusHandlers(daemon: DaemonContext): Record<string, Rout
     const agentSummary = agents.map((a) => {
       const isBusy = daemon.executor.isAgentBusy(a.name);
       const pending = daemon.db.countDuePendingEnvelopesForAgent(a.name);
-      const lastRun = daemon.db.getLastFinishedAgentRun(a.name);
+      const recentRuns = daemon.db.getRecentFinishedAgentRuns(a.name, 5);
+      const healthResetAt = typeof a.metadata?.healthResetAt === "number" ? a.metadata.healthResetAt : undefined;
       const currentRun = isBusy ? daemon.db.getCurrentRunningAgentRun(a.name) : null;
       const currentSessionTarget = currentRun
         ? resolveSessionRefreshTargetForAgent({ db: daemon.db, agentName: a.name })
@@ -41,7 +43,7 @@ export function createStatusHandlers(daemon: DaemonContext): Record<string, Rout
         role: a.metadata?.role as string | undefined,
         provider: a.provider,
         state: isBusy ? "running" : "idle",
-        health: !lastRun ? "unknown" : lastRun.status === "failed" ? "error" : "ok",
+        health: computeAgentHealth(recentRuns, healthResetAt),
         pendingCount: pending,
         ...(currentRun
           ? {
