@@ -2,12 +2,16 @@
  * Agent management API handlers.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { RouteHandler } from "../router.js";
 import { sendJson } from "../router.js";
 import { requireBossToken } from "../middleware/auth.js";
 import type { DaemonContext } from "../../daemon/rpc/context.js";
 import { resolveSessionRefreshTargetForAgent } from "../../agent/executor.js";
 import { computeAgentHealth } from "../../shared/agent-health.js";
+import { generateSystemInstructions } from "../../agent/instruction-generator.js";
+import { getAgentDir } from "../../agent/home-setup.js";
 
 function agentSummary(agent: any, bindings: string[]) {
   return {
@@ -356,6 +360,103 @@ export function createAgentHandlers(daemon: DaemonContext): Record<string, Route
     }
   };
 
+  const getAgentPrompt: RouteHandler = async (ctx) => {
+    const token = requireBossToken(ctx, daemon);
+    if (!token) return;
+
+    const agentName = ctx.params.name;
+    if (!agentName) {
+      sendJson(ctx.res, 400, { error: "Agent name required" });
+      return;
+    }
+
+    const agent = daemon.db.getAgentByNameCaseInsensitive(agentName);
+    if (!agent) {
+      sendJson(ctx.res, 404, { error: "Agent not found" });
+      return;
+    }
+
+    const bindings = daemon.db.getBindingsByAgentName(agent.name);
+    const bossName = daemon.db.getBossName();
+    const bossTimezone = daemon.db.getBossTimezone();
+    const adapterIds: Record<string, string> = {};
+    for (const b of bindings) {
+      const bossId = daemon.db.getAdapterBossId(b.adapterType);
+      if (bossId) adapterIds[b.adapterType] = bossId;
+    }
+
+    try {
+      const prompt = generateSystemInstructions({
+        agent,
+        agentToken: "(redacted)",
+        bindings,
+        hibossDir: daemon.config.dataDir,
+        bossTimezone,
+        boss: { name: bossName ?? undefined, adapterIds },
+      });
+      sendJson(ctx.res, 200, { agentName: agent.name, prompt });
+    } catch (err) {
+      sendJson(ctx.res, 500, { error: `Failed to render prompt: ${(err as Error).message}` });
+    }
+  };
+
+  const getAgentSoul: RouteHandler = async (ctx) => {
+    const token = requireBossToken(ctx, daemon);
+    if (!token) return;
+
+    const agentName = ctx.params.name;
+    if (!agentName) {
+      sendJson(ctx.res, 400, { error: "Agent name required" });
+      return;
+    }
+
+    const agent = daemon.db.getAgentByNameCaseInsensitive(agentName);
+    if (!agent) {
+      sendJson(ctx.res, 404, { error: "Agent not found" });
+      return;
+    }
+
+    const soulPath = path.join(getAgentDir(agent.name, daemon.config.dataDir), "SOUL.md");
+    let content = "";
+    try {
+      content = fs.readFileSync(soulPath, "utf-8");
+    } catch {
+      // File doesn't exist yet — return empty.
+    }
+
+    sendJson(ctx.res, 200, { agentName: agent.name, content });
+  };
+
+  const updateAgentSoul: RouteHandler = async (ctx) => {
+    const token = requireBossToken(ctx, daemon);
+    if (!token) return;
+
+    const agentName = ctx.params.name;
+    if (!agentName) {
+      sendJson(ctx.res, 400, { error: "Agent name required" });
+      return;
+    }
+
+    const agent = daemon.db.getAgentByNameCaseInsensitive(agentName);
+    if (!agent) {
+      sendJson(ctx.res, 404, { error: "Agent not found" });
+      return;
+    }
+
+    const body = ctx.body as { content?: string } | undefined;
+    if (!body || typeof body.content !== "string") {
+      sendJson(ctx.res, 400, { error: "content (string) is required" });
+      return;
+    }
+
+    const agentDir = getAgentDir(agent.name, daemon.config.dataDir);
+    fs.mkdirSync(agentDir, { recursive: true });
+    const soulPath = path.join(agentDir, "SOUL.md");
+    fs.writeFileSync(soulPath, body.content, "utf-8");
+
+    sendJson(ctx.res, 200, { agentName: agent.name, content: body.content });
+  };
+
   return {
     listAgents,
     getAgentStatus,
@@ -367,5 +468,8 @@ export function createAgentHandlers(daemon: DaemonContext): Record<string, Route
     addRemoteSkill,
     updateRemoteSkill,
     removeRemoteSkill,
+    getAgentPrompt,
+    getAgentSoul,
+    updateAgentSoul,
   };
 }

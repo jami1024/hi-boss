@@ -36,6 +36,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { RemoteSkillManager } from "@/components/RemoteSkillManager";
+import { AgentPromptPanel } from "@/components/AgentPromptPanel";
 
 function healthLabel(health: string): string {
   switch (health) {
@@ -439,6 +440,7 @@ export function AgentDetailPage() {
           <TabsTrigger value="provider">供应商</TabsTrigger>
           <TabsTrigger value="session">会话策略</TabsTrigger>
           <TabsTrigger value="skills">远程技能</TabsTrigger>
+          <TabsTrigger value="prompt">提示词</TabsTrigger>
           <TabsTrigger value="info">信息</TabsTrigger>
         </TabsList>
 
@@ -588,6 +590,10 @@ export function AgentDetailPage() {
             onUpdate={handleUpdateRemoteSkill}
             onRemove={handleRemoveRemoteSkill}
           />
+        </TabsContent>
+
+        <TabsContent value="prompt" className="space-y-4 mt-4">
+          <AgentPromptPanel agentName={agent.name} />
         </TabsContent>
 
         <TabsContent value="info" className="space-y-4 mt-4">

@@ -432,6 +432,25 @@ export const api = {
       clearedPendingCount: number;
     }>("POST", `/agents/${encodeURIComponent(name)}/abort`),
 
+  getAgentPrompt: (name: string) =>
+    request<{ agentName: string; prompt: string }>(
+      "GET",
+      `/agents/${encodeURIComponent(name)}/prompt`,
+    ),
+
+  getAgentSoul: (name: string) =>
+    request<{ agentName: string; content: string }>(
+      "GET",
+      `/agents/${encodeURIComponent(name)}/soul`,
+    ),
+
+  updateAgentSoul: (name: string, content: string) =>
+    request<{ agentName: string; content: string }>(
+      "PUT",
+      `/agents/${encodeURIComponent(name)}/soul`,
+      { content },
+    ),
+
   listAgentRemoteSkills: (name: string) =>
     request<{
       targetType: "agent" | "project";
