@@ -102,6 +102,55 @@ function createRouteContext(params: {
   };
 }
 
+test("sendMessage blocks destructive intent and returns 409", async () => {
+  await withTempDb(async (db) => {
+    db.setBossToken("boss-token");
+    db.registerAgent({ name: "free", provider: "codex", role: "speaker" });
+    const handlers = createEnvelopeHandlers(buildDaemonContext(db));
+    const mock = createMockResponse();
+
+    await handlers.sendMessage(
+      createRouteContext({
+        token: "boss-token",
+        res: mock.res,
+        agentName: "free",
+        body: { text: "删除test目录" },
+      })
+    );
+
+    assert.equal(mock.getStatus(), 409);
+    const body = mock.getBody() as { error: string };
+    assert.equal(body.error, "destructive-confirmation-required");
+
+    // No envelope should be created
+    const pending = db.getPendingEnvelopesForAgent("free", 10);
+    assert.equal(pending.length, 0);
+  });
+});
+
+test("sendMessage allows destructive text with confirmation prefix", async () => {
+  await withTempDb(async (db) => {
+    db.setBossToken("boss-token");
+    db.registerAgent({ name: "free", provider: "codex", role: "speaker" });
+    const handlers = createEnvelopeHandlers(buildDaemonContext(db));
+    const mock = createMockResponse();
+
+    await handlers.sendMessage(
+      createRouteContext({
+        token: "boss-token",
+        res: mock.res,
+        agentName: "free",
+        body: { text: "确认执行：删除test目录" },
+      })
+    );
+
+    assert.equal(mock.getStatus(), 200);
+    const body = mock.getBody() as { id: string };
+    const envelope = db.getEnvelopeById(body.id);
+    assert.equal(envelope?.content.text, "删除test目录");
+  });
+});
+
 test("sendMessage rejects leader direct chat", async () => {
   await withTempDb(async (db) => {
     db.setBossToken("boss-token");

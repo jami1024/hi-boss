@@ -25,6 +25,11 @@ import { logEvent } from "../../shared/daemon-log.js";
 import { validateDirectChatTarget } from "../direct-chat-policy.js";
 import { WEB_BOSS_ADDRESS } from "../handlers/envelopes.js";
 import { computeAgentHealth } from "../../shared/agent-health.js";
+import {
+  hasDestructiveIntent,
+  stripDestructiveConfirmationPrefix,
+  DESTRUCTIVE_CONFIRMATION_TEXT,
+} from "../../shared/destructive-intent.js";
 
 interface WsClient {
   ws: WebSocket;
@@ -329,6 +334,22 @@ export class ChatWebSocket {
       return;
     }
 
+    // Destructive-intent gate: require explicit confirmation prefix for high-risk operations.
+    let effectiveText = text.trim();
+    const confirmedText = stripDestructiveConfirmationPrefix(effectiveText);
+    if (confirmedText !== undefined) {
+      effectiveText = confirmedText;
+    } else if (hasDestructiveIntent(effectiveText)) {
+      logEvent("info", "web-chat-destructive-confirmation-required", {
+        "agent-name": agent.name,
+      });
+      this.send(client, {
+        type: "destructive-confirmation-required",
+        message: DESTRUCTIVE_CONFIRMATION_TEXT,
+      });
+      return;
+    }
+
     try {
       const clientMessageId = clientMessageIdRaw.trim();
       const conversationId = conversationIdRaw.trim();
@@ -336,7 +357,7 @@ export class ChatWebSocket {
         from: WEB_BOSS_ADDRESS,
         to: formatAgentAddress(agent.name),
         fromBoss: true,
-        content: { text: text.trim() },
+        content: { text: effectiveText },
         metadata: {
           source: "web",
           ...(clientMessageId ? { clientMessageId } : {}),
