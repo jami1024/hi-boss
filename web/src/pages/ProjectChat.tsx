@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { api, type Conversation, type ConversationMessage, type ProjectSummary } from "@/api/client";
+import { api, ApiError, type Conversation, type ConversationMessage, type ProjectSummary } from "@/api/client";
 import { MessageBubble, type ChatMessageData } from "@/components/chat/MessageBubble";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
 import { ConversationList } from "@/components/chat/ConversationList";
@@ -9,6 +9,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { type AgentWsStatus, useWebSocket } from "@/hooks/useWebSocket";
 
 export function ProjectChatPage() {
@@ -22,6 +30,7 @@ export function ProjectChatPage() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [agentRunning, setAgentRunning] = useState(false);
+  const [destructiveConfirm, setDestructiveConfirm] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const sendLockRef = useRef(false);
   const lastMessageId = messages.length > 0 ? messages[messages.length - 1]?.id : undefined;
@@ -113,21 +122,32 @@ export function ProjectChatPage() {
     [id, navigate]
   );
 
-  const handleSend = async () => {
-    if (!conversationId || !input.trim() || sendLockRef.current) return;
-    const text = input.trim();
-    setInput("");
+  const handleSend = async (overrideText?: string) => {
+    const textToSend = overrideText ?? input.trim();
+    if (!conversationId || !textToSend || sendLockRef.current) return;
+    if (!overrideText) setInput("");
     sendLockRef.current = true;
     setSending(true);
     try {
-      await api.sendConversationMessage(conversationId, text);
+      await api.sendConversationMessage(conversationId, textToSend);
       await loadConversation();
     } catch (err) {
-      setError((err as Error).message);
+      if (err instanceof ApiError && err.status === 409 && err.message === "destructive-confirmation-required") {
+        setDestructiveConfirm(textToSend);
+      } else {
+        setError((err as Error).message);
+      }
     } finally {
       sendLockRef.current = false;
       setSending(false);
     }
+  };
+
+  const handleDestructiveConfirm = () => {
+    if (!destructiveConfirm) return;
+    const text = destructiveConfirm;
+    setDestructiveConfirm(null);
+    void handleSend(`确认执行：${text}`);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -173,6 +193,7 @@ export function ProjectChatPage() {
   }
 
   return (
+    <>
     <div className="flex h-full">
       {/* Conversation sidebar */}
       {project && (
@@ -272,5 +293,28 @@ export function ProjectChatPage() {
         )}
       </div>
     </div>
+
+    <Dialog open={destructiveConfirm !== null} onOpenChange={(open) => { if (!open) setDestructiveConfirm(null); }}>
+      <DialogContent className="sm:max-w-[420px]">
+        <DialogHeader>
+          <DialogTitle>高风险操作确认</DialogTitle>
+          <DialogDescription>
+            检测到可能的破坏性操作（删除/清空/重置），请确认是否继续执行：
+          </DialogDescription>
+        </DialogHeader>
+        <div className="rounded-md bg-muted p-3 font-mono text-sm break-all">
+          {destructiveConfirm}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setDestructiveConfirm(null)}>
+            取消
+          </Button>
+          <Button variant="destructive" onClick={handleDestructiveConfirm}>
+            确认执行
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }

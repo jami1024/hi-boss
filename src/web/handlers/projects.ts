@@ -2,6 +2,8 @@
  * Project management API handlers for the web UI.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { formatAgentAddress } from "../../adapters/types.js";
 import type { DaemonContext } from "../../daemon/rpc/context.js";
 import { deriveProjectIdFromRoot } from "../../daemon/rpc/work-item-orchestration.js";
@@ -9,12 +11,55 @@ import {
   classifyProjectChatIntent,
 } from "../../shared/project-intent.js";
 import { isProjectTaskPriority, isProjectTaskState } from "../../shared/project-task.js";
+import {
+  hasDestructiveIntent,
+  stripDestructiveConfirmationPrefix,
+  DESTRUCTIVE_CONFIRMATION_TEXT,
+} from "../../shared/destructive-intent.js";
 import { requireBossToken } from "../middleware/auth.js";
 import type { RouteHandler } from "../router.js";
 import { sendJson } from "../router.js";
 import { WEB_BOSS_ADDRESS } from "./envelopes.js";
 
 export function createProjectHandlers(daemon: DaemonContext): Record<string, RouteHandler> {
+  /**
+   * Validate and optionally auto-create project root directory.
+   *
+   * All project roots must be inside (or equal to) the speaker's workspace.
+   *
+   * If the path doesn't exist:
+   *   - The parent directory must already exist (no multi-level creation).
+   *   - Only then, create the single final directory.
+   * Returns an error string on failure; null on success.
+   */
+  function ensureProjectRoot(root: string, agentWorkspace: string | undefined | null): string | null {
+    const resolved = path.resolve(root);
+    const workspace = agentWorkspace ? path.resolve(agentWorkspace) : null;
+
+    // All project roots must be under the speaker's workspace.
+    if (!workspace) {
+      return `发言智能体未设置 workspace，无法校验项目路径: ${root}`;
+    }
+    if (resolved !== workspace && !resolved.startsWith(workspace + path.sep)) {
+      return `项目路径必须在发言智能体的 workspace 下: ${root}（workspace: ${workspace}）`;
+    }
+
+    if (fs.existsSync(resolved)) {
+      if (!fs.statSync(resolved).isDirectory()) {
+        return `项目路径已存在但不是目录: ${root}`;
+      }
+      return null;
+    }
+
+    // The parent must already exist — we only create one level.
+    const parent = path.dirname(resolved);
+    if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) {
+      return `项目路径的父目录不存在: ${parent}。请填写一个已存在的父目录路径。`;
+    }
+    fs.mkdirSync(resolved);
+    return null;
+  }
+
   const normalizeTaskId = (raw: string | undefined): string | null => {
     if (!raw) return null;
     const normalized = raw.trim();
@@ -121,6 +166,12 @@ export function createProjectHandlers(daemon: DaemonContext): Record<string, Rou
     }
     if (agent.role !== "speaker") {
       sendJson(ctx.res, 400, { error: `Agent '${agent.name}' must have role 'speaker'` });
+      return;
+    }
+
+    const rootError = ensureProjectRoot(root, agent.workspace);
+    if (rootError) {
+      sendJson(ctx.res, 400, { error: rootError });
       return;
     }
 
@@ -369,6 +420,12 @@ export function createProjectHandlers(daemon: DaemonContext): Record<string, Rou
       return;
     }
 
+    const rootError = ensureProjectRoot(root, agent.workspace);
+    if (rootError) {
+      sendJson(ctx.res, 400, { error: rootError });
+      return;
+    }
+
     const id = deriveProjectIdFromRoot(root);
 
     // Check if project already exists
@@ -406,9 +463,22 @@ export function createProjectHandlers(daemon: DaemonContext): Record<string, Rou
     }
 
     const body = ctx.body as { text?: string } | undefined;
-    const text = body?.text?.trim();
-    if (!text) {
+    const rawText = body?.text?.trim();
+    if (!rawText) {
       sendJson(ctx.res, 400, { error: "text is required" });
+      return;
+    }
+
+    // Destructive-intent gate
+    let text = rawText;
+    const confirmedText = stripDestructiveConfirmationPrefix(text);
+    if (confirmedText !== undefined) {
+      text = confirmedText;
+    } else if (hasDestructiveIntent(text)) {
+      sendJson(ctx.res, 409, {
+        error: "destructive-confirmation-required",
+        message: DESTRUCTIVE_CONFIRMATION_TEXT,
+      });
       return;
     }
 

@@ -257,10 +257,108 @@ test("listProjectChatMessages returns project-scoped inter-agent messages", asyn
   });
 });
 
-test("createProject rejects non-speaker as speakerAgent", async () => {
+test("createProject auto-creates single-level root under speaker workspace", async () => {
   await withTempDb(async (db, tempDir) => {
     db.setBossToken("boss-token");
-    db.registerAgent({ name: "kai", provider: "codex", role: "leader" });
+    const workspace = path.join(tempDir, "workspace");
+    fs.mkdirSync(workspace, { recursive: true });
+    db.registerAgent({ name: "nex", provider: "codex", role: "speaker", workspace });
+    const handlers = createProjectHandlers(buildDaemonContext(db));
+    const mock = createMockResponse();
+    const newRoot = path.join(workspace, "new-project");
+
+    await handlers.createProject(
+      createRouteContext({
+        token: "boss-token",
+        res: mock.res,
+        id: "",
+        body: {
+          name: "new-project",
+          root: newRoot,
+          speakerAgent: "nex",
+        },
+      })
+    );
+
+    assert.equal(mock.getStatus(), 201);
+    assert.ok(fs.existsSync(newRoot), "directory should be auto-created");
+    assert.ok(fs.statSync(newRoot).isDirectory());
+  });
+});
+
+test("createProject rejects multi-level non-existent root path", async () => {
+  await withTempDb(async (db, tempDir) => {
+    db.setBossToken("boss-token");
+    const workspace = path.join(tempDir, "workspace");
+    fs.mkdirSync(workspace, { recursive: true });
+    db.registerAgent({ name: "nex", provider: "codex", role: "speaker", workspace });
+    const handlers = createProjectHandlers(buildDaemonContext(db));
+    const mock = createMockResponse();
+    // deep/repo — parent "deep" doesn't exist
+    const deepRoot = path.join(workspace, "deep", "repo");
+
+    await handlers.createProject(
+      createRouteContext({
+        token: "boss-token",
+        res: mock.res,
+        id: "",
+        body: {
+          name: "repo",
+          root: deepRoot,
+          speakerAgent: "nex",
+        },
+      })
+    );
+
+    assert.equal(mock.getStatus(), 400);
+    const body = mock.getBody() as { error: string };
+    assert.ok(body.error.includes("父目录不存在"), body.error);
+    assert.ok(!fs.existsSync(deepRoot), "directory should NOT be auto-created");
+  });
+});
+
+test("createProject rejects non-existent root outside speaker workspace", async () => {
+  await withTempDb(async (db, tempDir) => {
+    db.setBossToken("boss-token");
+    const workspace = path.join(tempDir, "workspace");
+    fs.mkdirSync(workspace, { recursive: true });
+    // parent "outside" exists, but is not under workspace
+    const outsideParent = path.join(tempDir, "outside");
+    fs.mkdirSync(outsideParent, { recursive: true });
+    db.registerAgent({ name: "nex", provider: "codex", role: "speaker", workspace });
+    const handlers = createProjectHandlers(buildDaemonContext(db));
+    const mock = createMockResponse();
+    const outsideRoot = path.join(outsideParent, "repo");
+
+    await handlers.createProject(
+      createRouteContext({
+        token: "boss-token",
+        res: mock.res,
+        id: "",
+        body: {
+          name: "repo-a",
+          root: outsideRoot,
+          speakerAgent: "nex",
+        },
+      })
+    );
+
+    assert.equal(mock.getStatus(), 400);
+    const body = mock.getBody() as { error: string };
+    assert.ok(body.error.includes("workspace"), body.error);
+    assert.ok(!fs.existsSync(outsideRoot), "directory should NOT be auto-created");
+  });
+});
+
+test("createProject rejects existing directory outside speaker workspace", async () => {
+  await withTempDb(async (db, tempDir) => {
+    db.setBossToken("boss-token");
+    const workspace = path.join(tempDir, "workspace");
+    fs.mkdirSync(workspace, { recursive: true });
+    // This directory exists but is outside workspace
+    const outsideDir = path.join(tempDir, "config-dir");
+    fs.mkdirSync(outsideDir, { recursive: true });
+    db.registerAgent({ name: "nex", provider: "codex", role: "speaker", workspace });
     const handlers = createProjectHandlers(buildDaemonContext(db));
     const mock = createMockResponse();
 
@@ -270,8 +368,36 @@ test("createProject rejects non-speaker as speakerAgent", async () => {
         res: mock.res,
         id: "",
         body: {
+          name: "bad-project",
+          root: outsideDir,
+          speakerAgent: "nex",
+        },
+      })
+    );
+
+    assert.equal(mock.getStatus(), 400);
+    const body = mock.getBody() as { error: string };
+    assert.ok(body.error.includes("workspace"), body.error);
+  });
+});
+
+test("createProject rejects non-speaker as speakerAgent", async () => {
+  await withTempDb(async (db, tempDir) => {
+    db.setBossToken("boss-token");
+    db.registerAgent({ name: "kai", provider: "codex", role: "leader" });
+    const handlers = createProjectHandlers(buildDaemonContext(db));
+    const mock = createMockResponse();
+    const projectRoot = path.join(tempDir, "repo-a");
+    fs.mkdirSync(projectRoot, { recursive: true });
+
+    await handlers.createProject(
+      createRouteContext({
+        token: "boss-token",
+        res: mock.res,
+        id: "",
+        body: {
           name: "repo-a",
-          root: path.join(tempDir, "repo-a"),
+          root: projectRoot,
           speakerAgent: "kai",
         },
       })
@@ -287,12 +413,14 @@ test("createProject rejects non-speaker as speakerAgent", async () => {
 test("updateProject rejects selecting agent who is already a project leader as speaker", async () => {
   await withTempDb(async (db, tempDir) => {
     db.setBossToken("boss-token");
-    db.registerAgent({ name: "nex", provider: "codex", role: "speaker" });
-    db.registerAgent({ name: "kai", provider: "codex", role: "speaker" });
+    db.registerAgent({ name: "nex", provider: "codex", role: "speaker", workspace: tempDir });
+    db.registerAgent({ name: "kai", provider: "codex", role: "speaker", workspace: tempDir });
+    const projectRoot = path.join(tempDir, "repo-a");
+    fs.mkdirSync(projectRoot, { recursive: true });
     db.upsertProject({
       id: "repo.a",
       name: "repo-a",
-      root: path.join(tempDir, "repo-a"),
+      root: projectRoot,
       speakerAgent: "nex",
     });
     db.upsertProjectLeader({

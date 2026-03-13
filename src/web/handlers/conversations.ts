@@ -12,6 +12,11 @@ import type { DaemonContext } from "../../daemon/rpc/context.js";
 import { formatAgentAddress } from "../../adapters/types.js";
 import { validateDirectChatTarget } from "../direct-chat-policy.js";
 import { WEB_BOSS_ADDRESS } from "./envelopes.js";
+import {
+  hasDestructiveIntent,
+  stripDestructiveConfirmationPrefix,
+  DESTRUCTIVE_CONFIRMATION_TEXT,
+} from "../../shared/destructive-intent.js";
 
 export function createConversationHandlers(daemon: DaemonContext): Record<string, RouteHandler> {
   /**
@@ -176,7 +181,18 @@ export function createConversationHandlers(daemon: DaemonContext): Record<string
       return;
     }
 
-    const text = body.text.trim();
+    // Destructive-intent gate
+    let text = body.text.trim();
+    const confirmedText = stripDestructiveConfirmationPrefix(text);
+    if (confirmedText !== undefined) {
+      text = confirmedText;
+    } else if (hasDestructiveIntent(text)) {
+      sendJson(ctx.res, 409, {
+        error: "destructive-confirmation-required",
+        message: DESTRUCTIVE_CONFIRMATION_TEXT,
+      });
+      return;
+    }
 
     const envelope = await daemon.router.routeEnvelope({
       from: WEB_BOSS_ADDRESS,

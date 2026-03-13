@@ -33,12 +33,6 @@ const cardVariants = {
   }),
 };
 
-function roleLabel(role: string | null): string {
-  if (role === "speaker") return "发言者";
-  if (role === "leader") return "领队";
-  return role ?? "—";
-}
-
 export function ProjectsPage() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [filter, setFilter] = useState("");
@@ -56,6 +50,11 @@ export function ProjectsPage() {
     speakerAgent: "",
     mainGroupChannel: "",
   });
+
+  function generateProjectName(): string {
+    const suffix = Math.random().toString(36).slice(2, 6);
+    return `project-${suffix}`;
+  }
 
   const loadProjects = useCallback(async () => {
     try {
@@ -161,7 +160,10 @@ export function ProjectsPage() {
           />
           <Dialog open={dialogOpen} onOpenChange={(open) => {
             setDialogOpen(open);
-            if (!open) {
+            if (open) {
+              setNewProject({ name: generateProjectName(), root: "", speakerAgent: "", mainGroupChannel: "" });
+              setCreateError("");
+            } else {
               setCreateError("");
             }
           }}>
@@ -199,7 +201,7 @@ export function ProjectsPage() {
                     }
                   />
                   <p className="text-xs text-muted-foreground">
-                    当前机器上的项目绝对路径。
+                    项目绝对路径，须在发言智能体的 workspace 下。若目录不存在将自动创建（仅限一层）。
                   </p>
                 </div>
                 <div className="space-y-2">
@@ -214,10 +216,9 @@ export function ProjectsPage() {
                       <SelectValue placeholder="选择一个智能体" />
                     </SelectTrigger>
                     <SelectContent>
-                      {agents.map((agent) => (
+                      {agents.filter((a) => a.role === "speaker").map((agent) => (
                         <SelectItem key={agent.name} value={agent.name}>
                           {agent.name}
-                          {agent.role ? ` (${roleLabel(agent.role)})` : ""}
                         </SelectItem>
                       ))}
                     </SelectContent>

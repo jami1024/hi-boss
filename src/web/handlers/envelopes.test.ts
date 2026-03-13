@@ -102,55 +102,6 @@ function createRouteContext(params: {
   };
 }
 
-test("sendMessage blocks destructive intent and returns 409", async () => {
-  await withTempDb(async (db) => {
-    db.setBossToken("boss-token");
-    db.registerAgent({ name: "free", provider: "codex", role: "speaker" });
-    const handlers = createEnvelopeHandlers(buildDaemonContext(db));
-    const mock = createMockResponse();
-
-    await handlers.sendMessage(
-      createRouteContext({
-        token: "boss-token",
-        res: mock.res,
-        agentName: "free",
-        body: { text: "删除test目录" },
-      })
-    );
-
-    assert.equal(mock.getStatus(), 409);
-    const body = mock.getBody() as { error: string };
-    assert.equal(body.error, "destructive-confirmation-required");
-
-    // No envelope should be created
-    const pending = db.getPendingEnvelopesForAgent("free", 10);
-    assert.equal(pending.length, 0);
-  });
-});
-
-test("sendMessage allows destructive text with confirmation prefix", async () => {
-  await withTempDb(async (db) => {
-    db.setBossToken("boss-token");
-    db.registerAgent({ name: "free", provider: "codex", role: "speaker" });
-    const handlers = createEnvelopeHandlers(buildDaemonContext(db));
-    const mock = createMockResponse();
-
-    await handlers.sendMessage(
-      createRouteContext({
-        token: "boss-token",
-        res: mock.res,
-        agentName: "free",
-        body: { text: "确认执行：删除test目录" },
-      })
-    );
-
-    assert.equal(mock.getStatus(), 200);
-    const body = mock.getBody() as { id: string };
-    const envelope = db.getEnvelopeById(body.id);
-    assert.equal(envelope?.content.text, "删除test目录");
-  });
-});
-
 test("sendMessage rejects leader direct chat", async () => {
   await withTempDb(async (db) => {
     db.setBossToken("boss-token");
@@ -168,9 +119,8 @@ test("sendMessage rejects leader direct chat", async () => {
     );
 
     assert.equal(mock.getStatus(), 400);
-    assert.deepEqual(mock.getBody(), {
-      error: "Direct chat is only available for speaker agents",
-    });
+    const body = mock.getBody() as { error: string };
+    assert.ok(body.error.includes("not allowed"), body.error);
   });
 });
 
@@ -197,13 +147,12 @@ test("sendMessage rejects speaker already bound to a project", async () => {
     );
 
     assert.equal(mock.getStatus(), 400);
-    assert.deepEqual(mock.getBody(), {
-      error: "Speaker 'nex' is bound to project 'repo.a'. Use project chat instead.",
-    });
+    const body = mock.getBody() as { error: string };
+    assert.ok(body.error.includes("not allowed"), body.error);
   });
 });
 
-test("sendMessage allows unbound speaker direct chat", async () => {
+test("sendMessage rejects unbound speaker direct chat", async () => {
   await withTempDb(async (db) => {
     db.setBossToken("boss-token");
     db.registerAgent({ name: "free", provider: "codex", role: "speaker" });
@@ -219,11 +168,9 @@ test("sendMessage allows unbound speaker direct chat", async () => {
       })
     );
 
-    assert.equal(mock.getStatus(), 200);
-    const body = mock.getBody() as { id: string };
-    const envelope = db.getEnvelopeById(body.id);
-    assert.equal(envelope?.to, "agent:free");
-    assert.equal((envelope?.metadata as Record<string, unknown> | undefined)?.source, "web");
+    assert.equal(mock.getStatus(), 400);
+    const body = mock.getBody() as { error: string };
+    assert.ok(body.error.includes("not allowed"), body.error);
   });
 });
 
@@ -243,8 +190,7 @@ test("listMessages rejects leader direct chat route", async () => {
     );
 
     assert.equal(mock.getStatus(), 400);
-    assert.deepEqual(mock.getBody(), {
-      error: "Direct chat is only available for speaker agents",
-    });
+    const body = mock.getBody() as { error: string };
+    assert.ok(body.error.includes("not allowed"), body.error);
   });
 });
