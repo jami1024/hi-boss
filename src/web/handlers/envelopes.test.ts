@@ -119,9 +119,8 @@ test("sendMessage rejects leader direct chat", async () => {
     );
 
     assert.equal(mock.getStatus(), 400);
-    assert.deepEqual(mock.getBody(), {
-      error: "Direct chat is only available for speaker agents",
-    });
+    const body = mock.getBody() as { error: string };
+    assert.ok(body.error.includes("not allowed"), body.error);
   });
 });
 
@@ -148,13 +147,12 @@ test("sendMessage rejects speaker already bound to a project", async () => {
     );
 
     assert.equal(mock.getStatus(), 400);
-    assert.deepEqual(mock.getBody(), {
-      error: "Speaker 'nex' is bound to project 'repo.a'. Use project chat instead.",
-    });
+    const body = mock.getBody() as { error: string };
+    assert.ok(body.error.includes("not allowed"), body.error);
   });
 });
 
-test("sendMessage allows unbound speaker direct chat", async () => {
+test("sendMessage rejects unbound speaker direct chat", async () => {
   await withTempDb(async (db) => {
     db.setBossToken("boss-token");
     db.registerAgent({ name: "free", provider: "codex", role: "speaker" });
@@ -170,11 +168,9 @@ test("sendMessage allows unbound speaker direct chat", async () => {
       })
     );
 
-    assert.equal(mock.getStatus(), 200);
-    const body = mock.getBody() as { id: string };
-    const envelope = db.getEnvelopeById(body.id);
-    assert.equal(envelope?.to, "agent:free");
-    assert.equal((envelope?.metadata as Record<string, unknown> | undefined)?.source, "web");
+    assert.equal(mock.getStatus(), 400);
+    const body = mock.getBody() as { error: string };
+    assert.ok(body.error.includes("not allowed"), body.error);
   });
 });
 
@@ -194,8 +190,7 @@ test("listMessages rejects leader direct chat route", async () => {
     );
 
     assert.equal(mock.getStatus(), 400);
-    assert.deepEqual(mock.getBody(), {
-      error: "Direct chat is only available for speaker agents",
-    });
+    const body = mock.getBody() as { error: string };
+    assert.ok(body.error.includes("not allowed"), body.error);
   });
 });

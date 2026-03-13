@@ -19,5 +19,7 @@
     "lib": "@/lib",
     "hooks": "@/hooks"
   },
-  "registries": {}
+  "registries": {
+    "@8bitcn": "https://www.8bitcn.com/r/{name}.json"
+  }
 }

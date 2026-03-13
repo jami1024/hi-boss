@@ -18,11 +18,12 @@ function withTempDb(run: (db: HiBossDatabase, tempDir: string) => void): void {
   }
 }
 
-test("validateDirectChatTarget rejects non-speaker agent", () => {
+test("validateDirectChatTarget rejects leader agent", () => {
   withTempDb((db) => {
     const leader = db.registerAgent({ name: "kai", provider: "codex", role: "leader" }).agent;
     const result = validateDirectChatTarget(db, leader);
-    assert.equal(result, "Direct chat is only available for speaker agents");
+    assert.ok(result !== null, "should block direct chat");
+    assert.ok(result.includes("not allowed"), result);
   });
 });
 
@@ -36,14 +37,16 @@ test("validateDirectChatTarget rejects project-bound speaker", () => {
       speakerAgent: speaker.name,
     });
     const result = validateDirectChatTarget(db, speaker);
-    assert.equal(result, "Speaker 'nex' is bound to project 'repo.a'. Use project chat instead.");
+    assert.ok(result !== null, "should block direct chat");
+    assert.ok(result.includes("not allowed"), result);
   });
 });
 
-test("validateDirectChatTarget allows unbound speaker", () => {
+test("validateDirectChatTarget rejects unbound speaker", () => {
   withTempDb((db) => {
     const speaker = db.registerAgent({ name: "free", provider: "codex", role: "speaker" }).agent;
     const result = validateDirectChatTarget(db, speaker);
-    assert.equal(result, null);
+    assert.ok(result !== null, "should block direct chat");
+    assert.ok(result.includes("not allowed"), result);
   });
 });

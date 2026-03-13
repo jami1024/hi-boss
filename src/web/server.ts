@@ -85,6 +85,9 @@ export class WebServer {
     this.router.post(`${api}/agents/:name/skills/remote`, agentHandlers.addRemoteSkill);
     this.router.post(`${api}/agents/:name/skills/remote/:skillName/update`, agentHandlers.updateRemoteSkill);
     this.router.delete(`${api}/agents/:name/skills/remote/:skillName`, agentHandlers.removeRemoteSkill);
+    this.router.get(`${api}/agents/:name/prompt`, agentHandlers.getAgentPrompt);
+    this.router.get(`${api}/agents/:name/soul`, agentHandlers.getAgentSoul);
+    this.router.put(`${api}/agents/:name/soul`, agentHandlers.updateAgentSoul);
 
     // Chat / Envelopes
     const envelopeHandlers = createEnvelopeHandlers(this.daemon);

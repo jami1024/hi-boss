@@ -1,5 +1,4 @@
 import {
-  BookOpenText,
   Bot,
   Gauge,
   MessagesSquare,
@@ -24,7 +23,6 @@ const navItems = [
   { title: "智能体", path: "/agents", icon: Bot },
   { title: "项目", path: "/projects", icon: MessagesSquare },
   { title: "信封", path: "/envelopes", icon: Sparkle },
-  { title: "提示词", path: "/prompts", icon: BookOpenText },
   { title: "配置", path: "/cli", icon: Settings2 },
 ];
 

@@ -18,47 +18,35 @@ interface PixelOfficeSceneProps {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Zone assignment                                                    */
+/*  Desk grid layout — each agent gets their own desk                  */
+/*  Columns adapt to agent count and center horizontally.              */
 /* ------------------------------------------------------------------ */
 
-type Zone = "desk" | "sofa" | "debug";
+const MAX_COLS = 4;
+const DESK_WIDTH = 22; // % width per desk slot
 
-function agentZone(status?: AgentCardStatus): Zone {
-  if (status?.health === "error") return "debug";
-  if (status?.state === "running") return "desk";
-  return "sofa";
+function layoutGrid(agentCount: number) {
+  if (agentCount === 0) return { cols: 1, rows: 1, offsetX: 50, startY: 55, stepY: 34 };
+  const cols = Math.min(agentCount, MAX_COLS);
+  const rows = Math.max(1, Math.ceil(agentCount / cols));
+  const totalW = cols * DESK_WIDTH;
+  const offsetX = (100 - totalW) / 2 + DESK_WIDTH / 2;
+  const startY = 55; // agents sit lower so they're clearly below the desk top
+  const stepY = 34;
+  return { cols, rows, offsetX, startY, stepY };
 }
 
-/* ------------------------------------------------------------------ */
-/*  Desk positions (work area, left side) - max 6 desks                */
-/* ------------------------------------------------------------------ */
-
-const DESK_SLOTS = [
-  { x: 6, y: 32 },
-  { x: 30, y: 32 },
-  { x: 54, y: 32 },
-  { x: 6, y: 62 },
-  { x: 30, y: 62 },
-  { x: 54, y: 62 },
-];
-
-/* Sofa positions (break area, right side) - max 6 */
-const SOFA_SLOTS = [
-  { x: 78, y: 28 },
-  { x: 78, y: 48 },
-  { x: 78, y: 68 },
-  { x: 92, y: 28 },
-  { x: 92, y: 48 },
-  { x: 92, y: 68 },
-];
-
-/* Debug positions (bottom-right corner) - max 4 */
-const DEBUG_SLOTS = [
-  { x: 78, y: 82 },
-  { x: 88, y: 82 },
-  { x: 83, y: 90 },
-  { x: 93, y: 90 },
-];
+function deskPosition(index: number, agentCount: number) {
+  const { cols, offsetX, startY, stepY } = layoutGrid(agentCount);
+  const row = Math.floor(index / cols);
+  const colsInRow = row < Math.floor((agentCount - 1) / cols) ? cols : ((agentCount - 1) % cols) + 1;
+  const col = index % cols;
+  const rowOffsetX = colsInRow < cols ? ((cols - colsInRow) * DESK_WIDTH) / 2 : 0;
+  return {
+    x: offsetX + col * DESK_WIDTH + rowOffsetX,
+    y: startY + row * stepY,
+  };
+}
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
@@ -66,15 +54,9 @@ const DEBUG_SLOTS = [
 
 export function PixelOfficeScene({ agents, onAgentClick }: PixelOfficeSceneProps) {
   const positioned = useMemo(() => {
-    const counters = { desk: 0, sofa: 0, debug: 0 };
-    const slots = { desk: DESK_SLOTS, sofa: SOFA_SLOTS, debug: DEBUG_SLOTS };
-
-    return agents.map((a) => {
-      const zone = agentZone(a.status);
-      const idx = counters[zone] % slots[zone].length;
-      counters[zone]++;
-      const pos = slots[zone][idx];
-      return { ...a, zone, pos };
+    return agents.map((a, i) => {
+      const pos = deskPosition(i, agents.length);
+      return { ...a, pos };
     });
   }, [agents]);
 
@@ -86,9 +68,27 @@ export function PixelOfficeScene({ agents, onAgentClick }: PixelOfficeSceneProps
     [onAgentClick],
   );
 
+  // Calculate scene aspect ratio — tight around desks, no excess floor
+  const grid = layoutGrid(agents.length);
+  const sceneHeight = Math.max(7, 4 + grid.rows * 4);
+
+  // Wall decorations spread evenly across the full wall width
+  const wallDecorations = useMemo(() => {
+    const items: Array<{ type: "bookshelf" | "lamp" | "plant"; x: number }> = [];
+    // Place decorations evenly across the wall regardless of desk positions
+    const decorCount = Math.max(agents.length * 2, 4);
+    const spacing = 90 / (decorCount + 1);
+    for (let i = 0; i < decorCount; i++) {
+      const x = 5 + spacing * (i + 1);
+      const types: Array<"bookshelf" | "lamp" | "plant"> = ["bookshelf", "lamp", "plant"];
+      items.push({ type: types[i % 3], x });
+    }
+    return items;
+  }, [agents.length]);
+
   return (
     <div className="relative w-full overflow-hidden rounded-2xl border-4 border-[#2a2a3d] shadow-[4px_4px_0_#1a1a2e]"
-      style={{ aspectRatio: "16/9", imageRendering: "auto" }}
+      style={{ aspectRatio: `16/${sceneHeight}`, imageRendering: "auto" }}
     >
       {/* Floor */}
       <div className="absolute inset-0 bg-[#3a6e5c]" />
@@ -102,62 +102,34 @@ export function PixelOfficeScene({ agents, onAgentClick }: PixelOfficeSceneProps
         }}
       />
 
-      {/* Water/pond areas */}
-      <WaterPatch x={35} y={45} w={30} h={20} />
-      <WaterPatch x={60} y={15} w={12} h={12} />
+      {/* ---- Wall (taller to fill proportionally) ---- */}
+      <Wall x={0} y={0} w={100} h={30} />
 
-      {/* ---- Work Area (left) ---- */}
+      {/* Zone label */}
       <ZoneLabel x={2} y={2} label="工作区" />
-      {/* Wall behind desks */}
-      <Wall x={0} y={0} w={68} h={22} />
-      {/* Desks */}
-      <Desk x={4} y={22} />
-      <Desk x={28} y={22} />
-      <Desk x={52} y={22} />
-      <Desk x={4} y={52} />
-      <Desk x={28} y={52} />
-      {/* Bookshelf */}
-      <Bookshelf x={1} y={3} />
-      <Bookshelf x={15} y={3} />
-      {/* Plants */}
-      <Plant x={24} y={5} size="lg" />
-      <Plant x={48} y={8} size="sm" />
-      {/* Lamp */}
-      <Lamp x={62} y={3} />
 
-      {/* ---- Break Area (right) ---- */}
-      <ZoneLabel x={75} y={2} label="休息区" />
-      {/* Wall behind break area */}
-      <Wall x={72} y={0} w={28} h={22} />
-      {/* Sofa */}
-      <Sofa x={76} y={22} />
-      {/* Coffee table */}
-      <CoffeeTable x={82} y={40} />
-      {/* Plants */}
-      <Plant x={95} y={5} size="lg" />
-      <Plant x={88} y={60} size="sm" />
-      {/* Bed / rest */}
-      <Bed x={85} y={22} />
+      {/* ---- Wall decorations (spread evenly) ---- */}
+      {wallDecorations.map((d, i) =>
+        d.type === "bookshelf" ? (
+          <Bookshelf key={`wd-${i}`} x={d.x} y={4} />
+        ) : d.type === "lamp" ? (
+          <Lamp key={`wd-${i}`} x={d.x} y={5} />
+        ) : (
+          <Plant key={`wd-${i}`} x={d.x} y={7} size="lg" />
+        ),
+      )}
+      {/* Clock centered */}
+      <WallClock x={49} y={5} />
 
-      {/* ---- Debug Corner (bottom-right) ---- */}
-      <ZoneLabel x={75} y={76} label="调试区" />
-      {/* Server rack */}
-      <ServerRack x={92} y={76} />
-      <ServerRack x={96} y={76} />
-      {/* Warning sign */}
-      <WarningSign x={76} y={78} />
+      {/* ---- Desks (one per agent, centered on agent x) ---- */}
+      {positioned.map((_, i) => {
+        const pos = deskPosition(i, agents.length);
+        return <Desk key={`desk-${i}`} x={pos.x - 9} y={pos.y - 14} />;
+      })}
 
       {/* ---- Decorative elements ---- */}
-      {/* Lily pads on water */}
-      <LilyPad x={38} y={48} />
-      <LilyPad x={45} y={52} />
-      <LilyPad x={50} y={46} />
-      <LilyPad x={42} y={56} />
-      <LilyPad x={62} y={18} />
-      {/* Flowers */}
-      <Flower x={36} y={44} color="#ff69b4" />
-      <Flower x={52} y={55} color="#dda0dd" />
-      <Flower x={64} y={20} color="#ff69b4" />
+      {grid.rows > 1 && <Plant x={96} y={35} size="sm" />}
+      {grid.rows > 1 && <WaterCooler x={96} y={50} />}
 
       {/* ---- Agent characters ---- */}
       {positioned.map((a) => (
@@ -166,9 +138,9 @@ export function PixelOfficeScene({ agents, onAgentClick }: PixelOfficeSceneProps
           name={a.agent.name}
           role={a.agent.role}
           description={a.agent.description}
-          zone={a.zone}
           state={a.status?.state}
           health={a.status?.health}
+          pending={a.status?.pending}
           x={a.pos.x}
           y={a.pos.y}
           onClick={handleClick(a.agent.name)}
@@ -203,9 +175,9 @@ function AgentCharacter({
   name,
   role,
   description,
-  zone,
   state,
   health,
+  pending,
   x,
   y,
   onClick,
@@ -213,45 +185,52 @@ function AgentCharacter({
   name: string;
   role: string | null;
   description?: string | null;
-  zone: Zone;
   state?: string;
   health?: string;
+  pending?: number;
   x: number;
   y: number;
   onClick: (e: React.MouseEvent) => void;
 }) {
-  void zone;
   const isRunning = state === "running";
   const isError = health === "error";
 
+  // Bubble text based on state
+  const bubbleText = isRunning
+    ? "工作中..."
+    : isError
+      ? "出错了!"
+      : pending && pending > 0
+        ? `${pending}条待处理`
+        : description
+          ? description
+          : "休息中~";
+
   return (
     <div
-      className="absolute cursor-pointer transition-all duration-700 ease-in-out"
+      className="absolute cursor-pointer transition-all duration-700 ease-in-out group/agent"
       style={{ left: `${x}%`, top: `${y}%`, transform: "translate(-50%, -50%)", zIndex: 20 }}
       onClick={onClick}
     >
       {/* Speech bubble */}
-      <div className="absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap">
+      <div className="absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap opacity-0 group-hover/agent:opacity-100 transition-opacity duration-200">
         <div
           className="relative rounded bg-white/95 px-1.5 py-0.5 text-[8px] font-medium text-zinc-700 shadow-sm"
-          style={{ fontFamily: "monospace", maxWidth: "80px" }}
+          style={{ fontFamily: "monospace", maxWidth: "100px" }}
         >
-          <span className="block truncate">
-            {isRunning
-              ? description || "工作中..."
-              : isError
-                ? "出错了!"
-                : description || "休息中~"
-            }
-          </span>
-          {/* Bubble tail */}
+          <span className="block truncate">{bubbleText}</span>
           <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 border-l-[3px] border-r-[3px] border-t-[4px] border-l-transparent border-r-transparent border-t-white/95" />
         </div>
       </div>
 
       {/* Character body */}
       <div className="relative flex flex-col items-center">
-        {/* Character sprite (simplified pixel art) */}
+        {/* Chair (behind character) */}
+        <div className="absolute top-[2px] left-1/2 -translate-x-1/2" style={{ zIndex: -1 }}>
+          <div className="h-[20px] w-[32px] rounded-t-lg bg-[#5a4030] border-2 border-[#3d2b1f]" />
+        </div>
+
+        {/* Character sprite */}
         <div
           className={cn(
             "relative flex items-center justify-center rounded-sm border-2 shadow-[2px_2px_0_rgba(0,0,0,0.3)]",
@@ -267,15 +246,27 @@ function AgentCharacter({
           {/* Character face */}
           <div className="relative" style={{ width: "18px", height: "18px" }}>
             {/* Eyes */}
-            <div className="absolute top-[3px] left-[3px] h-[3px] w-[3px] rounded-full bg-zinc-800" />
-            <div className="absolute top-[3px] right-[3px] h-[3px] w-[3px] rounded-full bg-zinc-800" />
-            {/* Mouth - changes with state */}
+            {!isRunning && !isError ? (
+              <>
+                {/* Sleepy eyes (idle) */}
+                <div className="absolute top-[5px] left-[3px] h-[1px] w-[4px] bg-zinc-600" />
+                <div className="absolute top-[5px] right-[3px] h-[1px] w-[4px] bg-zinc-600" />
+              </>
+            ) : (
+              <>
+                {/* Open eyes */}
+                <div className="absolute top-[3px] left-[3px] h-[3px] w-[3px] rounded-full bg-zinc-800" />
+                <div className="absolute top-[3px] right-[3px] h-[3px] w-[3px] rounded-full bg-zinc-800" />
+              </>
+            )}
+            {/* Mouth */}
             {isError ? (
               <div className="absolute bottom-[2px] left-1/2 h-[2px] w-[8px] -translate-x-1/2 rounded-t-full border-t-2 border-red-500" />
             ) : isRunning ? (
               <div className="absolute bottom-[3px] left-1/2 h-[4px] w-[6px] -translate-x-1/2 rounded-b-full bg-zinc-700" />
             ) : (
-              <div className="absolute bottom-[4px] left-1/2 h-[2px] w-[6px] -translate-x-1/2 bg-zinc-600" />
+              /* Sleeping mouth - small line */
+              <div className="absolute bottom-[4px] left-1/2 h-[2px] w-[4px] -translate-x-1/2 bg-zinc-400" />
             )}
             {/* Blush */}
             <div className="absolute bottom-[5px] left-[1px] h-[3px] w-[3px] rounded-full bg-pink-300/60" />
@@ -305,6 +296,14 @@ function AgentCharacter({
               <span className="h-[2px] w-[2px] animate-bounce rounded-full bg-amber-600 [animation-delay:0ms]" />
               <span className="h-[2px] w-[2px] animate-bounce rounded-full bg-amber-600 [animation-delay:150ms]" />
               <span className="h-[2px] w-[2px] animate-bounce rounded-full bg-amber-600 [animation-delay:300ms]" />
+            </div>
+          )}
+
+          {/* Sleeping Zzz for idle */}
+          {!isRunning && !isError && (
+            <div className="absolute -top-3 -right-3 flex flex-col items-start">
+              <span className="text-[7px] font-bold text-sky-300/80 animate-pulse [animation-delay:0ms]" style={{ fontFamily: "monospace" }}>z</span>
+              <span className="text-[5px] font-bold text-sky-300/60 animate-pulse [animation-delay:300ms] -mt-1 -ml-1" style={{ fontFamily: "monospace" }}>z</span>
             </div>
           )}
         </div>
@@ -346,14 +345,12 @@ function Wall({ x, w, h, y }: { x: number; y: number; w: number; h: number }) {
       className="absolute"
       style={{ left: `${x}%`, top: `${y}%`, width: `${w}%`, height: `${h}%` }}
     >
-      {/* Brick wall */}
       <div className="h-full w-full bg-[#8B6F5C]"
         style={{
           backgroundImage:
             "repeating-linear-gradient(0deg, transparent, transparent 8px, #7a6050 8px, #7a6050 9px), repeating-linear-gradient(90deg, transparent, transparent 16px, #7a6050 16px, #7a6050 17px)",
         }}
       />
-      {/* Wall base */}
       <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-[#5a4030]" />
     </div>
   );
@@ -367,12 +364,17 @@ function Desk({ x, y }: { x: number; y: number }) {
       {/* Monitor */}
       <div className="absolute top-[-20%] left-[30%] h-[28%] w-[40%] rounded-sm bg-[#2a2a3d] border-2 border-[#1a1a2e]">
         <div className="m-[2px] h-[calc(100%-4px)] w-[calc(100%-4px)] bg-[#1a3a2a]">
-          {/* Screen glow */}
           <div className="h-full w-full bg-gradient-to-b from-[#2a5a3a] to-[#1a3a2a] opacity-80" />
         </div>
       </div>
       {/* Monitor stand */}
       <div className="absolute top-[5%] left-[45%] h-[8%] w-[10%] bg-[#3a3a4d]" />
+      {/* Keyboard */}
+      <div className="absolute top-[8%] left-[25%] h-[6%] w-[30%] rounded-sm bg-[#4a4a5d] border border-[#3a3a4d]" />
+      {/* Coffee mug */}
+      <div className="absolute top-[4%] right-[12%] h-[8px] w-[8px] rounded-sm bg-white border border-zinc-300">
+        <div className="m-[1px] h-[3px] w-[3px] rounded-full bg-[#6a4a30]" />
+      </div>
       {/* Desk legs */}
       <div className="absolute bottom-0 left-[8%] h-[60%] w-[6%] bg-[#6d5a43]" />
       <div className="absolute bottom-0 right-[8%] h-[60%] w-[6%] bg-[#6d5a43]" />
@@ -380,44 +382,12 @@ function Desk({ x, y }: { x: number; y: number }) {
   );
 }
 
-function Sofa({ x, y }: { x: number; y: number }) {
-  return (
-    <div className="absolute" style={{ left: `${x}%`, top: `${y}%`, width: "8%", height: "14%", zIndex: 5 }}>
-      {/* Sofa body */}
-      <div className="absolute inset-x-0 bottom-0 h-[70%] rounded-sm bg-[#c4956a] border-2 border-[#a07850]">
-        {/* Cushion */}
-        <div className="absolute inset-[2px] rounded-sm bg-[#d4a57a]" />
-      </div>
-      {/* Sofa back */}
-      <div className="absolute inset-x-0 top-0 h-[40%] rounded-t-sm bg-[#a07850] border-2 border-[#8a6540]" />
-    </div>
-  );
-}
-
-function Bed({ x, y }: { x: number; y: number }) {
-  return (
-    <div className="absolute" style={{ left: `${x}%`, top: `${y}%`, width: "12%", height: "10%", zIndex: 5 }}>
-      {/* Bed frame */}
-      <div className="absolute inset-0 rounded-sm bg-[#6d5a43] border-2 border-[#4a3c2e]" />
-      {/* Mattress */}
-      <div className="absolute inset-[3px] rounded-sm bg-[#f0e6d4]" />
-      {/* Pillow */}
-      <div className="absolute top-[4px] left-[4px] h-[40%] w-[30%] rounded-sm bg-white border border-[#e0d6c4]" />
-      {/* Blanket */}
-      <div className="absolute bottom-[3px] right-[3px] h-[50%] w-[65%] rounded-sm bg-[#7a9ec4] border border-[#6088b0]" />
-    </div>
-  );
-}
-
 function Bookshelf({ x, y }: { x: number; y: number }) {
   return (
     <div className="absolute" style={{ left: `${x}%`, top: `${y}%`, width: "10%", height: "15%", zIndex: 6 }}>
-      {/* Frame */}
       <div className="absolute inset-0 bg-[#5a4030] border-2 border-[#3d2b1f] rounded-sm">
-        {/* Shelves */}
         <div className="absolute top-[32%] inset-x-0 h-[2px] bg-[#3d2b1f]" />
         <div className="absolute top-[64%] inset-x-0 h-[2px] bg-[#3d2b1f]" />
-        {/* Books */}
         <div className="absolute top-[5%] left-[8%] h-[25%] w-[18%] bg-[#c44]" />
         <div className="absolute top-[5%] left-[30%] h-[25%] w-[14%] bg-[#48a]" />
         <div className="absolute top-[5%] left-[48%] h-[25%] w-[18%] bg-[#6a4]" />
@@ -437,12 +407,10 @@ function Plant({ x, y, size }: { x: number; y: number; size: "sm" | "lg" }) {
   const s = size === "lg" ? 4 : 2.5;
   return (
     <div className="absolute" style={{ left: `${x}%`, top: `${y}%`, zIndex: 8 }}>
-      {/* Pot */}
       <div
         className="rounded-b-sm bg-[#b85c38] border border-[#944a2c]"
         style={{ width: `${s * 1.2}%`, height: `${s * 0.6}vh`, marginTop: "-2px" }}
       />
-      {/* Leaves */}
       <div
         className="absolute rounded-full bg-[#4a8c5c] border border-[#3a7a4c]"
         style={{
@@ -472,89 +440,38 @@ function Plant({ x, y, size }: { x: number; y: number; size: "sm" | "lg" }) {
 function Lamp({ x, y }: { x: number; y: number }) {
   return (
     <div className="absolute" style={{ left: `${x}%`, top: `${y}%`, zIndex: 7 }}>
-      {/* Shade */}
       <div className="h-3 w-4 rounded-t-full bg-[#f0c060] border border-[#d4a040] shadow-[0_0_8px_#f0c060aa]" />
-      {/* Stand */}
       <div className="mx-auto h-4 w-[2px] bg-[#8a7a60]" />
-      {/* Base */}
       <div className="mx-auto h-[2px] w-3 rounded bg-[#8a7a60]" />
     </div>
   );
 }
 
-function CoffeeTable({ x, y }: { x: number; y: number }) {
-  return (
-    <div className="absolute" style={{ left: `${x}%`, top: `${y}%`, width: "8%", height: "6%", zIndex: 5 }}>
-      <div className="absolute inset-0 rounded-sm bg-[#7a6050] border-2 border-[#5a4030]" />
-      {/* Coffee cup */}
-      <div className="absolute top-[-4px] right-[15%] h-[6px] w-[6px] rounded-sm bg-white border border-zinc-300">
-        <div className="m-[1px] h-[2px] w-[2px] rounded-full bg-[#6a4a30]" />
-      </div>
-    </div>
-  );
-}
-
-function ServerRack({ x, y }: { x: number; y: number }) {
-  return (
-    <div className="absolute" style={{ left: `${x}%`, top: `${y}%`, width: "3%", height: "16%", zIndex: 6 }}>
-      <div className="h-full w-full rounded-sm bg-[#2a2a3d] border-2 border-[#1a1a2e]">
-        {/* Server lights */}
-        {[15, 30, 45, 60, 75].map((top) => (
-          <div key={top} className="absolute left-[20%] flex gap-[1px]" style={{ top: `${top}%` }}>
-            <div className="h-[2px] w-[2px] animate-pulse rounded-full bg-emerald-400" style={{ animationDelay: `${top * 20}ms` }} />
-            <div className="h-[2px] w-[2px] rounded-full bg-amber-400" />
-          </div>
-        ))}
-        {/* Ventilation lines */}
-        {[20, 40, 60, 80].map((top) => (
-          <div key={`v${top}`} className="absolute right-[15%] h-[1px] w-[40%] bg-[#3a3a4d]" style={{ top: `${top}%` }} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function WarningSign({ x, y }: { x: number; y: number }) {
+function WallClock({ x, y }: { x: number; y: number }) {
   return (
     <div className="absolute" style={{ left: `${x}%`, top: `${y}%`, zIndex: 7 }}>
-      <div className="flex h-5 w-7 items-center justify-center rounded-sm bg-amber-400 border-2 border-amber-600 shadow-[1px_1px_0_#92400e]">
-        <span className="text-[8px] font-black text-amber-900" style={{ fontFamily: "monospace" }}>!</span>
+      <div className="h-5 w-5 rounded-full bg-white border-2 border-[#5a4030] shadow-[1px_1px_0_#3d2b1f]">
+        {/* Hour hand */}
+        <div className="absolute top-[50%] left-[50%] h-[5px] w-[1px] -translate-x-1/2 origin-bottom -rotate-45 bg-zinc-800" style={{ bottom: "50%" }} />
+        {/* Minute hand */}
+        <div className="absolute top-[25%] left-[50%] h-[7px] w-[1px] -translate-x-1/2 origin-bottom rotate-90 bg-zinc-600" style={{ bottom: "50%" }} />
+        {/* Center dot */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[2px] w-[2px] rounded-full bg-red-500" />
       </div>
     </div>
   );
 }
 
-function WaterPatch({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
+function WaterCooler({ x, y }: { x: number; y: number }) {
   return (
-    <div
-      className="absolute rounded-lg opacity-60"
-      style={{
-        left: `${x}%`,
-        top: `${y}%`,
-        width: `${w}%`,
-        height: `${h}%`,
-        background: "linear-gradient(135deg, #4a90a8 0%, #5aaccf 40%, #4a90a8 70%, #5aaccf 100%)",
-        zIndex: 2,
-      }}
-    />
-  );
-}
-
-function LilyPad({ x, y }: { x: number; y: number }) {
-  return (
-    <div
-      className="absolute h-2 w-2 rounded-full bg-[#4a8c5c] border border-[#3a7a4c]"
-      style={{ left: `${x}%`, top: `${y}%`, zIndex: 3 }}
-    />
-  );
-}
-
-function Flower({ x, y, color }: { x: number; y: number; color: string }) {
-  return (
-    <div
-      className="absolute h-2 w-2 rounded-full border"
-      style={{ left: `${x}%`, top: `${y}%`, backgroundColor: color, borderColor: `${color}88`, zIndex: 4 }}
-    />
+    <div className="absolute" style={{ left: `${x}%`, top: `${y}%`, zIndex: 6 }}>
+      {/* Tank */}
+      <div className="h-4 w-3 rounded-t-full bg-[#a0d4e8] border border-[#80b4c8] mx-auto" />
+      {/* Body */}
+      <div className="h-5 w-4 bg-[#e0e0e0] border border-[#c0c0c0] mx-auto rounded-b-sm">
+        <div className="absolute bottom-1 left-1/2 -translate-x-1/2 h-[3px] w-[3px] rounded-full bg-blue-400" />
+      </div>
+    </div>
   );
 }
 

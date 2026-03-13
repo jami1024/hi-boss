@@ -69,8 +69,8 @@ export function createEnvelopeBrowseHandlers(daemon: DaemonContext): Record<stri
       status: row.status as string,
       createdAt: row.created_at as number,
       deliverAt: row.deliver_at as number | null,
-      text: truncateText(parseContentText(row.content as string | null), 200),
-      hasAttachments: hasAttachments(row.content as string | null),
+      text: truncateText((row.content_text as string) ?? "", 200),
+      hasAttachments: hasJsonArray(row.content_attachments as string | null),
       metadata: row.metadata ? safeParseJson(row.metadata as string) : undefined,
     }));
 
@@ -118,21 +118,11 @@ export function createEnvelopeBrowseHandlers(daemon: DaemonContext): Record<stri
   return { listEnvelopes, getEnvelope };
 }
 
-function parseContentText(content: string | null): string {
-  if (!content) return "";
+function hasJsonArray(value: string | null): boolean {
+  if (!value) return false;
   try {
-    const parsed = JSON.parse(content);
-    return typeof parsed.text === "string" ? parsed.text : "";
-  } catch {
-    return "";
-  }
-}
-
-function hasAttachments(content: string | null): boolean {
-  if (!content) return false;
-  try {
-    const parsed = JSON.parse(content);
-    return Array.isArray(parsed.attachments) && parsed.attachments.length > 0;
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.length > 0;
   } catch {
     return false;
   }

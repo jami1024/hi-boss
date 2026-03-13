@@ -6,14 +6,12 @@ import { Badge } from "@/components/ui/badge";
 import { Dashboard } from "@/pages/Dashboard";
 import { AgentsPage } from "@/pages/Agents";
 import { AgentDetailPage } from "@/pages/AgentDetail";
-import { AgentChatPage } from "@/pages/AgentChat";
 import { ProjectsPage } from "@/pages/Projects";
 import { ProjectDetailPage } from "@/pages/ProjectDetail";
 import { ProjectChatPage } from "@/pages/ProjectChat";
 import { ProjectMemoryPage } from "@/pages/ProjectMemory";
 import { ProjectTasksPage } from "@/pages/ProjectTasks";
 import { ProjectTaskDetailPage } from "@/pages/ProjectTaskDetail";
-import { PromptsPage } from "@/pages/Prompts";
 import { ConfigPage } from "@/pages/Config";
 import { EnvelopesPage } from "@/pages/Envelopes";
 import { LoginPage, hasToken } from "@/pages/Login";
@@ -46,7 +44,6 @@ function AppLayout() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/agents" element={<AgentsPage />} />
             <Route path="/agents/:name" element={<AgentDetailPage />} />
-            <Route path="/agents/:name/chat" element={<AgentChatPage />} />
             <Route path="/projects" element={<ProjectsPage />} />
             <Route path="/projects/:id" element={<ProjectDetailPage />} />
             <Route path="/projects/:id/chat" element={<ProjectChatPage />} />
@@ -55,7 +52,6 @@ function AppLayout() {
             <Route path="/projects/:id/tasks" element={<ProjectTasksPage />} />
             <Route path="/projects/:id/tasks/:taskId" element={<ProjectTaskDetailPage />} />
             <Route path="/envelopes" element={<EnvelopesPage />} />
-            <Route path="/prompts" element={<PromptsPage />} />
             <Route path="/cli" element={<ConfigPage />} />
           </Routes>
         </main>

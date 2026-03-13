@@ -13,6 +13,11 @@ import type { DaemonContext } from "../../daemon/rpc/context.js";
 import { formatAgentAddress } from "../../adapters/types.js";
 import type { Envelope } from "../../envelope/types.js";
 import { validateDirectChatTarget } from "../direct-chat-policy.js";
+import {
+  hasDestructiveIntent,
+  stripDestructiveConfirmationPrefix,
+  DESTRUCTIVE_CONFIRMATION_TEXT,
+} from "../../shared/destructive-intent.js";
 
 /** Virtual address for boss messages sent via the web UI. */
 export const WEB_BOSS_ADDRESS = "channel:web:boss";
@@ -52,11 +57,24 @@ export function createEnvelopeHandlers(daemon: DaemonContext): Record<string, Ro
       return;
     }
 
+    // Destructive-intent gate: require explicit confirmation prefix for high-risk operations.
+    let effectiveText = body.text.trim();
+    const confirmedText = stripDestructiveConfirmationPrefix(effectiveText);
+    if (confirmedText !== undefined) {
+      effectiveText = confirmedText;
+    } else if (hasDestructiveIntent(effectiveText)) {
+      sendJson(ctx.res, 409, {
+        error: "destructive-confirmation-required",
+        message: DESTRUCTIVE_CONFIRMATION_TEXT,
+      });
+      return;
+    }
+
     const envelope = await daemon.router.routeEnvelope({
       from: WEB_BOSS_ADDRESS,
       to: formatAgentAddress(agent.name),
       fromBoss: true,
-      content: { text: body.text.trim() },
+      content: { text: effectiveText },
       metadata: { source: "web" },
     });
 
