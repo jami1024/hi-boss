@@ -120,7 +120,7 @@ export function AgentsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-[#1a1a2e]">
+    <div className="h-full bg-[#1a1a2e]">
       {/* Header: system status + agent stats */}
       <div className="flex items-center justify-between px-6 py-3 md:px-8">
         {/* Left: system status */}
@@ -181,7 +181,7 @@ export function AgentsPage() {
       </div>
 
       {/* Pixel Office Scene */}
-      <div className="px-4 pb-4 md:px-8">
+      <div className="px-4 pb-2 md:px-8">
         <PixelOfficeScene
           agents={pixelAgents}
           recentMessages={recentEnvelopes}
