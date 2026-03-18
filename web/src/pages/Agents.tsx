@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bot } from "lucide-react";
+import { Bot, Inbox, Play, Zap } from "lucide-react";
 import { api, type AgentSummary, type EnvelopeSummary, type ProjectSummary } from "@/api/client";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
 import { type AgentCardStatus } from "@/components/agents/AgentCatalogCard";
@@ -9,6 +9,18 @@ import { Badge } from "@/components/ui/8bit/badge";
 import { useDaemonStatusFeed } from "@/hooks/useDaemonStatusFeed";
 
 import "@/components/ui/8bit/styles/retro.css";
+
+function formatUptime(ms: number | null): string {
+  if (!ms) return "--";
+  const seconds = Math.floor(ms / 1000);
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${seconds % 60}s`;
+}
 
 export function AgentsPage() {
   const [agents, setAgents] = useState<AgentSummary[]>([]);
@@ -97,6 +109,7 @@ export function AgentsPage() {
   );
 
   const runningCount = Object.values(statuses).filter((s) => s.state === "running").length;
+  const totalPending = Object.values(statuses).reduce((sum, s) => sum + (s.pending ?? 0), 0);
 
   if (error) {
     return (
@@ -108,28 +121,58 @@ export function AgentsPage() {
 
   return (
     <div className="min-h-screen bg-[#1a1a2e]">
-      {/* 8-bit Header */}
+      {/* Header: system status + agent stats */}
       <div className="flex items-center justify-between px-6 py-3 md:px-8">
-        <div>
-          <h1 className="retro text-lg tracking-wider text-amber-200">
-            Agent Office
-          </h1>
-          <p className="retro mt-1 text-[8px] text-amber-200/50">
-            Real-time agent monitoring
-          </p>
-        </div>
+        {/* Left: system status */}
         <div className="flex items-center gap-3">
-          <div className="hidden items-center gap-3 rounded bg-[#2a2a3d] px-3 py-1.5 sm:flex">
-            <Badge variant="outline" className="border-amber-200/40 bg-transparent text-amber-200/80 text-[10px]">
-              {agents.length} Agents
+          <div className="flex items-center gap-2">
+            <Zap className="size-4 text-amber-400" />
+            <h1 className="retro text-sm tracking-wider text-amber-200">
+              Agent Office
+            </h1>
+          </div>
+          {daemonStatus && (
+            <div className="hidden items-center gap-2 rounded bg-[#2a2a3d]/80 px-2.5 py-1 sm:flex">
+              <span className="relative flex size-1.5">
+                <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-50" />
+                <span className="relative inline-flex size-1.5 rounded-full bg-emerald-400" />
+              </span>
+              <span className="retro text-[7px] text-emerald-300/80">
+                {daemonStatus.running ? "ONLINE" : "OFFLINE"}
+              </span>
+              {daemonStatus.bossName && (
+                <>
+                  <span className="text-amber-200/20">|</span>
+                  <span className="retro text-[7px] text-amber-200/60">
+                    {daemonStatus.bossName}
+                  </span>
+                </>
+              )}
+              <span className="text-amber-200/20">|</span>
+              <span className="retro text-[7px] text-amber-200/40">
+                UP {formatUptime(daemonStatus.uptime)}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Right: quick stats + connection */}
+        <div className="flex items-center gap-3">
+          <div className="hidden items-center gap-2 sm:flex">
+            <Badge variant="outline" className="border-amber-200/30 bg-transparent text-amber-200/70 text-[9px] gap-1">
+              <Bot className="size-2.5" />
+              {agents.length}
             </Badge>
             {runningCount > 0 && (
-              <Badge variant="default" className="bg-emerald-600 text-white text-[10px]">
-                <span className="relative mr-1 inline-flex size-1.5">
-                  <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-300 opacity-60" />
-                  <span className="relative inline-flex size-1.5 rounded-full bg-emerald-300" />
-                </span>
-                {runningCount} Running
+              <Badge variant="default" className="bg-emerald-600/80 text-white text-[9px] gap-1">
+                <Play className="size-2.5" />
+                {runningCount}
+              </Badge>
+            )}
+            {totalPending > 0 && (
+              <Badge variant="default" className="bg-amber-600/80 text-white text-[9px] gap-1">
+                <Inbox className="size-2.5" />
+                {totalPending}
               </Badge>
             )}
           </div>
@@ -137,7 +180,7 @@ export function AgentsPage() {
         </div>
       </div>
 
-      {/* Pixel Office Scene (contains agent status HUDs + message log) */}
+      {/* Pixel Office Scene */}
       <div className="px-4 pb-4 md:px-8">
         <PixelOfficeScene
           agents={pixelAgents}

@@ -79,7 +79,7 @@ export function PixelOfficeScene({ agents, recentMessages, recentProjects, onAge
   );
 
   const grid = layoutGrid(agents.length);
-  const sceneHeight = Math.max(9, 5 + grid.rows * 5);
+  const sceneHeight = Math.max(7, 4 + grid.rows * 3.5);
 
   const wallDecorations = useMemo(() => {
     const items: Array<{ type: "bookshelf" | "lamp" | "plant"; x: number }> = [];

@@ -1,6 +1,5 @@
 import {
   Bot,
-  Gauge,
   MessagesSquare,
   Settings2,
   Sparkle,
@@ -19,8 +18,7 @@ import {
 } from "@/components/ui/sidebar";
 
 const navItems = [
-  { title: "总览", path: "/", icon: Gauge },
-  { title: "智能体", path: "/agents", icon: Bot },
+  { title: "智能体", path: "/", icon: Bot },
   { title: "项目", path: "/projects", icon: MessagesSquare },
   { title: "信封", path: "/envelopes", icon: Sparkle },
   { title: "配置", path: "/cli", icon: Settings2 },
