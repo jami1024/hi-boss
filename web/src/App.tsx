@@ -3,7 +3,6 @@ import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/s
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { Badge } from "@/components/ui/badge";
-import { Dashboard } from "@/pages/Dashboard";
 import { AgentsPage } from "@/pages/Agents";
 import { AgentDetailPage } from "@/pages/AgentDetail";
 import { ProjectsPage } from "@/pages/Projects";
@@ -41,7 +40,7 @@ function AppLayout() {
         </header>
         <main className="flex-1 overflow-auto">
           <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={<AgentsPage />} />
             <Route path="/agents" element={<AgentsPage />} />
             <Route path="/agents/:name" element={<AgentDetailPage />} />
             <Route path="/projects" element={<ProjectsPage />} />
